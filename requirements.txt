@@ -4,3 +4,4 @@ tenacity==8.2.3
 pytz
 supabase
 Flask>=3.0.0
+python-dotenv

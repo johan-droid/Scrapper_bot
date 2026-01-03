@@ -12,6 +12,9 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from supabase import create_client, Client
 from flask import Flask
 from threading import Thread
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env file
 
 # Setup logging
 logging.basicConfig(
