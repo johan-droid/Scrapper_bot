@@ -467,17 +467,16 @@ def send_to_telegram(title, image_url, summary):
     clean_title = get_normalized_key(title)
     
     # Format as JSON-style message
-    json_message = f"""📢 <b>ANIME NEWS UPDATE</b> 📢
+    json_message = f"""�️‍♂️ <b>SECRET INTELLIGENCE REPORT</b> �️‍♂️
 
-{{
-  "title": "{escape_html(clean_title)}",
-  "summary": "{escape_html(summary) if summary else 'No summary available'}",
+<pre>{{
+  "case_file": "{escape_html(clean_title)}",
+  "intel": "{escape_html(summary) if summary else 'Details Classified'}",
   "source": "{source}",
-  "timestamp": "{datetime.now(utc_tz).strftime('%Y-%m-%d %H:%M:%S UTC')}",
-  "posted_by": "Anime News Bot"
-}}
+  "time": "{datetime.now(utc_tz).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+}}</pre>
 
-📰 <i>Stay updated with the latest anime news!</i>"""
+🎀 <i>There is always only one truth!</i>"""
 
     logging.info(f"Sending to Telegram - Title: {title}")
     logging.info(f"Image URL: {image_url}")
