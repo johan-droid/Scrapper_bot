@@ -9,12 +9,13 @@ Fetches anime news from different sources and posts them to your Telegram group 
   - TMS Entertainment
   - Fandom Wiki
   - ANN Detective Conan page
-- Posts to Telegram with images, titles, and captions
-- Runs continuously every 24 hours with daily resets
-- Prevents duplicate posts across sources
-- Auto-ping every 5 minutes for monitoring
+- Posts to Telegram with JSON-formatted messages
+- Runs continuously every 4 hours with optimized resource usage
+- Prevents duplicate posts across sources with database persistence
+- Auto-ping every 10 minutes for connection stability
 - Responds to /start command with bot statistics
-- Self-healing with retry logic
+- Memory-efficient with cleanup and chunked sleeping
+- Rate-limited API calls to respect free tier limits
 
 ## Setup
 1. Clone the repository
@@ -75,7 +76,7 @@ Run: `python animebot.py`
 
 5. **Monitor**: Check logs in the Render dashboard. The bot will run continuously, fetching news every 4 hours.
 
-**Note**: Render's free tier provides 750 hours/month. The bot uses ~24 hours/month, well within limits.
+**Note**: Render's free tier provides 750 hours/month. The bot uses ~24 hours/month with optimized sleeping and minimal API calls.
 
 ## Configuration
 - Change timezone in `animebot.py` if needed (default: Asia/Kolkata)
