@@ -510,23 +510,26 @@ def send_to_telegram(title, image_url, summary):
         # Do not retry; just log and move on
 
 def ping_bot():
-    """Ping the bot to keep it alive."""
+    """Ping the bot to keep it alive (lightweight check)."""
     try:
-        response = session.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe", timeout=10)
+        # Light ping - just check if we can reach Telegram API
+        response = session.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe", timeout=5)
         response.raise_for_status()
-        logging.info("🤖 Bot ping successful")
+        # Only log occasionally to reduce log spam
+        pass  # Silent success
     except requests.RequestException as e:
-        logging.error(f"Bot ping failed: {e}")
+        logging.warning(f"Bot ping failed: {e}")
 
 def handle_updates():
-    """Polls for Telegram updates and handles commands."""
+    """Polls for Telegram updates and handles commands (efficient polling)."""
     update_id = 0
     while True:
         try:
+            # Poll every 30 seconds instead of continuously
             response = session.get(
                 f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
-                params={"offset": update_id + 1, "timeout": 30},
-                timeout=35
+                params={"offset": update_id + 1, "timeout": 20, "limit": 5},  # Reduced timeout and limit
+                timeout=25
             )
             response.raise_for_status()
             updates = response.json().get("result", [])
@@ -537,14 +540,14 @@ def handle_updates():
                 if message and message.get("text") == "/start":
                     user_id = message["from"]["id"]
                     chat_id = message["chat"]["id"]
-                    if str(user_id) == ADMIN_ID or not ADMIN_ID:  # If ADMIN_ID set, only allow admin
+                    if str(user_id) == ADMIN_ID or not ADMIN_ID:
                         stats = get_bot_stats()
                         send_message(chat_id, stats)
-                    else:
-                        send_message(chat_id, "Unauthorized.")
+                        time.sleep(1)  # Small delay after sending
         except requests.RequestException as e:
-            logging.error(f"Error polling updates: {e}")
-            time.sleep(5)
+            logging.warning(f"Update polling error: {e}")
+            time.sleep(10)  # Back off on errors
+        time.sleep(30)  # Poll every 30 seconds
 
 def run_once():
     global today_local, last_run_time, posts_today
@@ -561,11 +564,22 @@ def run_once():
     
     logging.info("Fetching latest anime news...")
     logging.info(f"Today's date (local): {today_local}")
+    
+    # Scrape sources with delays to reduce load spikes
     news_list = fetch_anime_news()
+    time.sleep(3)  # Delay between sources
+    
     dc_updates = fetch_dc_updates()
+    time.sleep(3)
+    
     tms_news = fetch_tms_news()
+    time.sleep(3)
+    
     fandom_updates = fetch_fandom_updates()
+    time.sleep(3)
+    
     ann_dc_news = fetch_ann_dc_news()
+    
     all_updates = news_list + dc_updates + tms_news + fandom_updates + ann_dc_news
 
     if not all_updates:
@@ -574,21 +588,27 @@ def run_once():
 
     fetch_selected_articles(news_list + ann_dc_news)  # For ANN news that have articles
     
+    posted_count = 0
     for update in all_updates:
         if get_normalized_key(update["title"]) not in load_posted_titles():
             send_to_telegram(update["title"], update.get("image"), update["summary"])
-            time.sleep(2)  # Delay to avoid hitting Telegram rate limits
+            posted_count += 1
+            time.sleep(4)  # Increased delay between posts
     
+    logging.info(f"Posted {posted_count} new updates this cycle")
     last_run_time = datetime.now(utc_tz)
+    
+    # Memory cleanup
+    del news_list, dc_updates, tms_news, fandom_updates, ann_dc_news, all_updates
 
 if __name__ == "__main__":
     from threading import Thread
     
-    # Start update handler in a separate thread
-    update_thread = Thread(target=handle_updates, daemon=True)
+    # Start update handler in a separate thread (low priority)
+    update_thread = Thread(target=handle_updates, daemon=True, name="UpdateHandler")
     update_thread.start()
     
-    heartbeat_interval = 300  # 5 minutes
+    heartbeat_interval = 600  # 10 minutes
     last_heartbeat = time.time()
     
     while True:
@@ -599,4 +619,7 @@ if __name__ == "__main__":
         
         run_once()
         logging.info("Sleeping for 4 hours...")
-        time.sleep(14400)  # 4 hours in seconds
+        
+        # Sleep in chunks to allow for graceful shutdown
+        for _ in range(144):  # 144 * 100 = 14400 seconds
+            time.sleep(100)
