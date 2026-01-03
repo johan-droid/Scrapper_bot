@@ -75,7 +75,7 @@ def get_bot_stats():
         f"📊 Posts Today: {posts_today}\n"
         f"📈 Total Posts: {total_posts}\n"
         f"🌐 Sources: ANN, DC Wiki, TMS, Fandom, ANN DC\n"
-        f"🔄 Next Run: Every 24 hours\n"
+        f"🔄 Next Run: Every 4 hours\n"
         f"✅ Status: Active"
     )
     return stats
@@ -568,5 +568,5 @@ if __name__ == "__main__":
             last_heartbeat = current_time
         
         run_once()
-        logging.info("Sleeping for 24 hours...")
-        time.sleep(86400)  # 24 hours in seconds
+        logging.info("Sleeping for 4 hours...")
+        time.sleep(14400)  # 4 hours in seconds
