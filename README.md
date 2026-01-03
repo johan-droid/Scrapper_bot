@@ -21,12 +21,11 @@ Fetches anime news from different sources and posts them to your Telegram group 
 2. Create a virtual environment: `python -m venv .venv`
 3. Activate: `.venv\Scripts\activate` (Windows)
 4. Install dependencies: `pip install -r requirements.txt`
-5. Set environment variables:
-   - `BOT_TOKEN`: Your Telegram bot token
-   - `CHAT_ID`: Your Telegram chat ID (group or channel)
-   - `ADMIN_ID`: (Optional) Your Telegram user ID for /start command access
-   - `SUPABASE_URL`: (Optional) Your Supabase project URL
-   - `SUPABASE_KEY`: (Optional) Your Supabase anon key
+5. Copy `.env.example` to `.env` and fill in your values:
+   ```bash
+   cp .env.example .env
+   ```
+6. Edit `.env` with your actual credentials
 
 ## Supabase Database Setup (Optional)
 If you want persistent storage to prevent reposts across deployments:
