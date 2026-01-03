@@ -473,22 +473,14 @@ def send_to_telegram(title, image_url, summary):
         logging.error(f"Failed to send message for {title}: {e}")
         # Do not retry; just log and move on
 
-def send_message(chat_id, text):
-    """Sends a text message to a specific chat."""
+def ping_bot():
+    """Ping the bot to keep it alive."""
     try:
-        response = session.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "HTML",
-            },
-            timeout=10,
-        )
+        response = session.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe", timeout=10)
         response.raise_for_status()
-        logging.info(f"Sent message to {chat_id}")
+        logging.info("🤖 Bot ping successful")
     except requests.RequestException as e:
-        logging.error(f"Failed to send message to {chat_id}: {e}")
+        logging.error(f"Bot ping failed: {e}")
 
 def handle_updates():
     """Polls for Telegram updates and handles commands."""
@@ -564,7 +556,7 @@ if __name__ == "__main__":
     while True:
         current_time = time.time()
         if current_time - last_heartbeat >= heartbeat_interval:
-            logging.info("🤖 Bot heartbeat: Alive and running")
+            ping_bot()
             last_heartbeat = current_time
         
         run_once()
