@@ -3,3 +3,4 @@ beautifulsoup4==4.12.2
 tenacity==8.2.3
 pytz
 supabase
+Flask>=3.0.0

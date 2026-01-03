@@ -10,6 +10,8 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from tenacity import retry, stop_after_attempt, wait_exponential
 from supabase import create_client, Client
+from flask import Flask
+from threading import Thread
 
 # Setup logging
 logging.basicConfig(
@@ -24,6 +26,7 @@ CHAT_ID = os.getenv("CHAT_ID")  # Fetch from environment variables
 ADMIN_ID = os.getenv("ADMIN_ID")  # Optional: Admin user ID for private commands
 SUPABASE_URL = os.getenv("SUPABASE_URL")  # Supabase project URL
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")  # Supabase anon key
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL") # Render URL for self-ping
 POSTED_TITLES_FILE = "posted_titles.json"
 BASE_URL = "https://www.animenewsnetwork.com"
 BASE_URL_DC = "https://www.detectiveconanworld.com"
@@ -56,6 +59,27 @@ last_run_time = None
 posts_today = 0
 total_posts = 0
 uptime_start = datetime.now(utc_tz)
+
+# Flask Setup
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is alive! 🤖", 200
+
+def keep_alive():
+    """Pings the web server storage url to keep it awake on free tiers."""
+    if not RENDER_EXTERNAL_URL:
+        return
+        
+    while True:
+        try:
+            time.sleep(600)  # Ping every 10 minutes
+            response = requests.get(RENDER_EXTERNAL_URL)
+            logging.info(f"Self-ping status: {response.status_code}")
+        except Exception as e:
+            logging.error(f"Self-ping failed: {e}")
+
 
 def escape_html(text):
     """Escapes special characters for Telegram HTML formatting."""
@@ -618,24 +642,41 @@ def run_once():
     del news_list, dc_updates, tms_news, fandom_updates, ann_dc_news, all_updates
 
 if __name__ == "__main__":
-    from threading import Thread
-    
-    # Start update handler in a separate thread (low priority)
-    update_thread = Thread(target=handle_updates, daemon=True, name="UpdateHandler")
-    update_thread.start()
-    
-    heartbeat_interval = 600  # 10 minutes
-    last_heartbeat = time.time()
-    
-    while True:
-        current_time = time.time()
-        if current_time - last_heartbeat >= heartbeat_interval:
-            ping_bot()
-            last_heartbeat = current_time
+    # Start the bot loop in a background thread
+    def bot_loop():
+        # Start update handler in a separate thread (low priority)
+        update_thread = Thread(target=handle_updates, daemon=True, name="UpdateHandler")
+        update_thread.start()
         
-        run_once()
-        logging.info("Sleeping for 4 hours...")
+        heartbeat_interval = 600  # 10 minutes
+        last_heartbeat = time.time()
         
-        # Sleep in chunks to allow for graceful shutdown
-        for _ in range(144):  # 144 * 100 = 14400 seconds
-            time.sleep(100)
+        # Start keep-alive pinger in background
+        if RENDER_EXTERNAL_URL:
+             ping_thread = Thread(target=keep_alive, daemon=True, name="Pinger")
+             ping_thread.start()
+        
+        while True:
+            current_time = time.time()
+            if current_time - last_heartbeat >= heartbeat_interval:
+                ping_bot()
+                last_heartbeat = current_time
+            
+            try:
+                run_once()
+            except Exception as e:
+                logging.error(f"Critical error in run_once: {e}")
+                
+            logging.info("Sleeping for 4 hours...")
+            
+            # Sleep in chunks to allow for graceful shutdown
+            for _ in range(144):  # 144 * 100 = 14400 seconds
+                time.sleep(100)
+
+    # Start bot thread
+    bot_thread = Thread(target=bot_loop, daemon=True)
+    bot_thread.start()
+    
+    # Run Flask server (blocks main thread)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
