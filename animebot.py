@@ -20,8 +20,13 @@ logging.basicConfig(
 # Configuration
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # Fetch from environment variables
 CHAT_ID = os.getenv("CHAT_ID")  # Fetch from environment variables
+ADMIN_ID = os.getenv("ADMIN_ID")  # Optional: Admin user ID for private commands
 POSTED_TITLES_FILE = "posted_titles.json"
 BASE_URL = "https://www.animenewsnetwork.com"
+BASE_URL_DC = "https://www.detectiveconanworld.com"
+BASE_URL_TMS = "https://tmsanime.com"
+BASE_URL_FANDOM = "https://detectiveconan.fandom.com"
+BASE_URL_ANN_DC = "https://www.animenewsnetwork.com/encyclopedia/anime.php?id=454&tab=news"
 DEBUG_MODE = False  # Set True to test without date filter
 
 if not BOT_TOKEN or not CHAT_ID:
@@ -35,14 +40,48 @@ today_local = datetime.now(local_tz).date()
 
 session = requests.Session()
 
+# Bot Stats
+last_run_time = None
+posts_today = 0
+total_posts = 0
+uptime_start = datetime.now(utc_tz)
+
 def escape_html(text):
     """Escapes special characters for Telegram HTML formatting."""
     if not text or not isinstance(text, str):
         return ""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+def get_normalized_key(title):
+    """Normalizes the title to a key for deduplication across sources."""
+    if title.startswith('DC Wiki Update: '):
+        return title[len('DC Wiki Update: '):].strip()
+    elif title.startswith('TMS News: '):
+        return title[len('TMS News: '):].strip()
+    elif title.startswith('Fandom Wiki Update: '):
+        return title[len('Fandom Wiki Update: '):].strip()
+    elif title.startswith('ANN DC News: '):
+        return title[len('ANN DC News: '):].strip()
+    else:
+        return title.strip()  # For general ANN news
+
+def get_bot_stats():
+    """Returns bot statistics."""
+    uptime = datetime.now(utc_tz) - uptime_start
+    stats = (
+        f"🤖 <b>Bot Statistics</b>\n"
+        f"⏰ Uptime: {uptime.days}d {uptime.seconds//3600}h {(uptime.seconds//60)%60}m\n"
+        f"📅 Last Run: {last_run_time.astimezone(local_tz).strftime('%Y-%m-%d %H:%M') if last_run_time else 'Never'}\n"
+        f"📊 Posts Today: {posts_today}\n"
+        f"📈 Total Posts: {total_posts}\n"
+        f"🌐 Sources: ANN, DC Wiki, TMS, Fandom, ANN DC\n"
+        f"🔄 Next Run: Every 24 hours\n"
+        f"✅ Status: Active"
+    )
+    return stats
+
 def load_posted_titles():
-    """Loads posted titles from file."""
+    """Loads posted normalized keys from file."""
     try:
         if os.path.exists(POSTED_TITLES_FILE):
             with open(POSTED_TITLES_FILE, "r", encoding="utf-8") as file:
@@ -53,10 +92,11 @@ def load_posted_titles():
         return set()
 
 def save_posted_title(title):
-    """Saves a title to prevent duplicate posting."""
+    """Saves a normalized key to prevent duplicate posting."""
     try:
+        key = get_normalized_key(title)
         titles = load_posted_titles()
-        titles.add(title)
+        titles.add(key)
         with open(POSTED_TITLES_FILE, "w", encoding="utf-8") as file:
             json.dump(list(titles), file)
     except Exception as e:
@@ -149,6 +189,190 @@ def fetch_article_details(article_url, article):
 
     return {"image": image_url, "summary": summary}
 
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def fetch_dc_updates():
+    """Fetches recent changes from Detective Conan Wiki."""
+    try:
+        url = f"{BASE_URL_DC}/wiki/Special:RecentChanges"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+        response = session.get(url, headers=headers, timeout=5)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        updates_list = []
+        # MediaWiki recent changes are in a list
+        changes = soup.find_all("li", class_=re.compile(r"mw-changeslist-line"))
+
+        for change in changes:
+            time_tag = change.find("a", class_="mw-changeslist-date")
+            if not time_tag:
+                continue
+            time_str = time_tag.get_text(strip=True)
+            # Parse time, assuming format like "15:10, 27 September 2025"
+            try:
+                # Adjust for current year if not present
+                if "," in time_str:
+                    date_str = time_str + f", {datetime.now().year}"
+                else:
+                    date_str = time_str
+                change_date = datetime.strptime(date_str, "%H:%M, %d %B %Y").replace(tzinfo=pytz.utc).astimezone(local_tz).date()
+            except ValueError as e:
+                logging.error(f"Error parsing date {time_str}: {e}")
+                continue
+
+            if DEBUG_MODE or change_date == today_local:
+                title_tag = change.find("a", class_="mw-changeslist-title")
+                if not title_tag:
+                    continue
+                page_title = title_tag.get_text(strip=True)
+                user_tag = change.find("a", class_="mw-userlink")
+                user = user_tag.get_text(strip=True) if user_tag else "Unknown"
+                comment_tag = change.find("span", class_="comment")
+                comment = comment_tag.get_text(strip=True) if comment_tag else ""
+
+                # Create a unique title
+                title = f"DC Wiki Update: {page_title}"
+                summary = f"Edited by {user}. {comment}" if comment else f"Edited by {user}."
+
+                updates_list.append({"title": title, "summary": summary, "image": None})
+                logging.info(f"✅ Found today's wiki update: {title}")
+
+        logging.info(f"Filtered today's wiki updates: {len(updates_list)}")
+        return updates_list
+
+    except requests.RequestException as e:
+        logging.error(f"Fetch DC updates error: {e}")
+        return []
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def fetch_tms_news():
+    """Fetches latest news from TMS Detective Conan page."""
+    try:
+        response = session.get(BASE_URL_TMS + "/detective-conan", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}, timeout=5)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        news_list = []
+        # Find the LATEST TMS NEWS section
+        latest_news_section = soup.find(string="LATEST TMS NEWS")
+        if latest_news_section:
+            parent = latest_news_section.parent
+            # Find the following links
+            news_links = parent.find_next_siblings("a")[:5]  # First 5 news items
+            for link in news_links:
+                title = link.get_text(strip=True)
+                url = link.get("href")
+                if title and url:
+                    # Create a title
+                    news_title = f"TMS News: {title}"
+                    summary = f"Read more: {BASE_URL_TMS}{url}" if not url.startswith("http") else f"Read more: {url}"
+                    news_list.append({"title": news_title, "summary": summary, "image": None})
+                    logging.info(f"✅ Found TMS news: {title}")
+
+        logging.info(f"Filtered TMS news: {len(news_list)}")
+        return news_list
+
+    except requests.RequestException as e:
+        logging.error(f"Fetch TMS news error: {e}")
+        return []
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def fetch_fandom_updates():
+    """Fetches recent changes from Detective Conan Fandom Wiki."""
+    try:
+        url = f"{BASE_URL_FANDOM}/wiki/Special:RecentChanges"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+        response = session.get(url, headers=headers, timeout=5)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        updates_list = []
+        # Fandom uses similar structure
+        changes = soup.find_all("li", class_=re.compile(r"mw-changeslist-line"))
+
+        for change in changes:
+            time_tag = change.find("a", class_="mw-changeslist-date")
+            if not time_tag:
+                continue
+            time_str = time_tag.get_text(strip=True)
+            # Parse time, assuming format like "15:10, 27 September 2025"
+            try:
+                # Adjust for current year if not present
+                if "," in time_str:
+                    date_str = time_str + f", {datetime.now().year}"
+                else:
+                    date_str = time_str
+                change_date = datetime.strptime(date_str, "%H:%M, %d %B %Y").replace(tzinfo=pytz.utc).astimezone(local_tz).date()
+            except ValueError as e:
+                logging.error(f"Error parsing date {time_str}: {e}")
+                continue
+
+            if DEBUG_MODE or change_date == today_local:
+                title_tag = change.find("a", class_="mw-changeslist-title")
+                if not title_tag:
+                    continue
+                page_title = title_tag.get_text(strip=True)
+                user_tag = change.find("a", class_="mw-userlink")
+                user = user_tag.get_text(strip=True) if user_tag else "Unknown"
+                comment_tag = change.find("span", class_="comment")
+                comment = comment_tag.get_text(strip=True) if comment_tag else ""
+
+                # Create a unique title
+                title = f"Fandom Wiki Update: {page_title}"
+                summary = f"Edited by {user}. {comment}" if comment else f"Edited by {user}."
+
+                updates_list.append({"title": title, "summary": summary, "image": None})
+                logging.info(f"✅ Found today's Fandom wiki update: {title}")
+
+        logging.info(f"Filtered today's Fandom wiki updates: {len(updates_list)}")
+        return updates_list
+
+    except requests.RequestException as e:
+        logging.error(f"Fetch Fandom updates error: {e}")
+        return []
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def fetch_ann_dc_news():
+    """Fetches latest Detective Conan news from ANN encyclopedia page."""
+    try:
+        response = session.get(BASE_URL_ANN_DC, timeout=5)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        news_list = []
+        all_articles = soup.find_all("div", class_="herald box news t-news")
+        logging.info(f"Total DC articles found: {len(all_articles)}")
+
+        for article in all_articles:
+            title_tag = article.find("h3")
+            date_tag = article.find("time")
+            
+            if not title_tag or not date_tag:
+                continue
+
+            title = title_tag.get_text(strip=True)
+            date_str = date_tag["datetime"]  
+            try:
+                news_date = datetime.fromisoformat(date_str).astimezone(local_tz).date()
+            except ValueError as e:
+                logging.error(f"Error parsing date {date_str}: {e}")
+                continue
+
+            if DEBUG_MODE or news_date == today_local:
+                link = title_tag.find("a")
+                article_url = f"{BASE_URL}{link['href']}" if link else None
+                news_list.append({"title": f"ANN DC News: {title}", "article_url": article_url, "article": article})
+                logging.info(f"✅ Found today's DC news: {title}")
+            else:
+                logging.info(f"⏩ Skipping (not today's DC news): {title} - Date: {news_date}")
+
+        logging.info(f"Filtered today's DC articles: {len(news_list)}")
+        return news_list
+
+    except requests.RequestException as e:
+        logging.error(f"Fetch ANN DC news error: {e}")
+        return []
+
 def fetch_selected_articles(news_list):
     """Fetches article details concurrently."""
     posted_titles = load_posted_titles()
@@ -170,33 +394,41 @@ def fetch_selected_articles(news_list):
                 news["summary"] = "Failed to fetch summary."
 
 def send_to_telegram(title, image_url, summary):
-    """Posts news to Telegram with HTML formatting."""
-    safe_title = escape_html(title)
-    safe_summary = escape_html(summary) if summary else "No summary available"
+    """Posts news to Telegram with JSON-style formatting."""
+    global posts_today, total_posts
+    
+    # Extract source from title prefix
+    source = "Unknown"
+    if title.startswith('DC Wiki Update: '):
+        source = "Detective Conan Wiki"
+    elif title.startswith('TMS News: '):
+        source = "TMS Entertainment"
+    elif title.startswith('Fandom Wiki Update: '):
+        source = "Fandom Wiki"
+    elif title.startswith('ANN DC News: '):
+        source = "Anime-Planet DC"
+    else:
+        source = "Anime-Planet"
+    
+    # Clean title
+    clean_title = get_normalized_key(title)
+    
+    # Format as JSON-style message
+    json_message = f"""📢 <b>ANIME NEWS UPDATE</b> 📢
 
-    # Format the caption with a bold title, a line, summary, and the required ending
-    caption = (
-        f"<b>{safe_title}</b> ⚡\n"
-        f"﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏\n"
-        f"{safe_summary}\n"
-        f"﹋﹋﹋﹋﹋﹋﹋﹋﹋﹋﹋﹋﹋﹋﹋﹋﹋\n"
-        f"🍁 | @AniTimesIsland_acn"
-    )
+{{
+  "title": "{escape_html(clean_title)}",
+  "summary": "{escape_html(summary) if summary else 'No summary available'}",
+  "source": "{source}",
+  "timestamp": "{datetime.now(utc_tz).strftime('%Y-%m-%d %H:%M:%S UTC')}",
+  "posted_by": "Anime News Bot"
+}}
 
-    # Ensure caption length is within Telegram's 1024-character limit for sendPhoto
-    if len(caption) > 1024:
-        safe_summary = safe_summary[:1024 - len(safe_title) - 50] + "..."
-        caption = (
-            f"<b>{safe_title}</b> ⚡\n"
-            f"﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏﹏\n"
-            f"{safe_summary}\n"
-            f"﹋﹋﹋﹋﹋﹋﹋﹋﹋﹋﹋﹋﹋﹋﹋﹋﹋\n"
-            f"🍁 | @AniTimesIsland_acn"
-        )
+📰 <i>Stay updated with the latest anime news!</i>"""
 
     logging.info(f"Sending to Telegram - Title: {title}")
     logging.info(f"Image URL: {image_url}")
-    logging.info(f"Caption: {caption}")
+    logging.info(f"Message: {json_message}")
 
     # First, try sending with a photo if the image URL is valid
     if image_url and validate_image_url(image_url):
@@ -206,7 +438,7 @@ def send_to_telegram(title, image_url, summary):
                 data={
                     "chat_id": CHAT_ID,
                     "photo": image_url,
-                    "caption": caption,
+                    "caption": json_message,
                     "parse_mode": "HTML",
                 },
                 timeout=10,
@@ -214,6 +446,8 @@ def send_to_telegram(title, image_url, summary):
             response.raise_for_status()
             logging.info(f"✅ Posted with photo: {title}")
             save_posted_title(title)
+            posts_today += 1
+            total_posts += 1
             return
         except requests.RequestException as e:
             logging.error(f"Failed to send photo for {title}: {e}")
@@ -225,7 +459,7 @@ def send_to_telegram(title, image_url, summary):
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
             json={
                 "chat_id": CHAT_ID,
-                "text": caption,
+                "text": json_message,
                 "parse_mode": "HTML",
             },
             timeout=10,
@@ -233,24 +467,106 @@ def send_to_telegram(title, image_url, summary):
         response.raise_for_status()
         logging.info(f"✅ Posted as text: {title}")
         save_posted_title(title)
+        posts_today += 1
+        total_posts += 1
     except requests.RequestException as e:
         logging.error(f"Failed to send message for {title}: {e}")
         # Do not retry; just log and move on
 
+def send_message(chat_id, text):
+    """Sends a text message to a specific chat."""
+    try:
+        response = session.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        logging.info(f"Sent message to {chat_id}")
+    except requests.RequestException as e:
+        logging.error(f"Failed to send message to {chat_id}: {e}")
+
+def handle_updates():
+    """Polls for Telegram updates and handles commands."""
+    update_id = 0
+    while True:
+        try:
+            response = session.get(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
+                params={"offset": update_id + 1, "timeout": 30},
+                timeout=35
+            )
+            response.raise_for_status()
+            updates = response.json().get("result", [])
+            
+            for update in updates:
+                update_id = update["update_id"]
+                message = update.get("message")
+                if message and message.get("text") == "/start":
+                    user_id = message["from"]["id"]
+                    chat_id = message["chat"]["id"]
+                    if str(user_id) == ADMIN_ID or not ADMIN_ID:  # If ADMIN_ID set, only allow admin
+                        stats = get_bot_stats()
+                        send_message(chat_id, stats)
+                    else:
+                        send_message(chat_id, "Unauthorized.")
+        except requests.RequestException as e:
+            logging.error(f"Error polling updates: {e}")
+            time.sleep(5)
+
 def run_once():
+    global today_local, last_run_time, posts_today
+    current_date = datetime.now(local_tz).date()
+    if current_date != today_local:
+        # New day, reset posted titles and posts_today
+        logging.info("New day detected, resetting posted titles and daily stats.")
+        with open(POSTED_TITLES_FILE, "w", encoding="utf-8") as file:
+            json.dump([], file)
+        today_local = current_date
+        posts_today = 0
+    
     logging.info("Fetching latest anime news...")
     logging.info(f"Today's date (local): {today_local}")
     news_list = fetch_anime_news()
-    if not news_list:
-        logging.info("No new articles to post.")
+    dc_updates = fetch_dc_updates()
+    tms_news = fetch_tms_news()
+    fandom_updates = fetch_fandom_updates()
+    ann_dc_news = fetch_ann_dc_news()
+    all_updates = news_list + dc_updates + tms_news + fandom_updates + ann_dc_news
+
+    if not all_updates:
+        logging.info("No new articles or updates to post.")
         return
 
-    fetch_selected_articles(news_list)
+    fetch_selected_articles(news_list + ann_dc_news)  # For ANN news that have articles
     
-    for news in news_list:
-        if news["title"] not in load_posted_titles():
-            send_to_telegram(news["title"], news["image"], news["summary"])
+    for update in all_updates:
+        if get_normalized_key(update["title"]) not in load_posted_titles():
+            send_to_telegram(update["title"], update.get("image"), update["summary"])
             time.sleep(2)  # Delay to avoid hitting Telegram rate limits
+    
+    last_run_time = datetime.now(utc_tz)
 
 if __name__ == "__main__":
-    run_once()
+    from threading import Thread
+    
+    # Start update handler in a separate thread
+    update_thread = Thread(target=handle_updates, daemon=True)
+    update_thread.start()
+    
+    heartbeat_interval = 300  # 5 minutes
+    last_heartbeat = time.time()
+    
+    while True:
+        current_time = time.time()
+        if current_time - last_heartbeat >= heartbeat_interval:
+            logging.info("🤖 Bot heartbeat: Alive and running")
+            last_heartbeat = current_time
+        
+        run_once()
+        logging.info("Sleeping for 24 hours...")
+        time.sleep(86400)  # 24 hours in seconds
