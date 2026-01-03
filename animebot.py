@@ -225,6 +225,23 @@ def fetch_article_details(article_url, article):
 
     return {"image": image_url, "summary": summary}
 
+def send_message(chat_id, text):
+    """Sends a text message to Telegram."""
+    try:
+        response = session.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+            },
+            timeout=10,
+        )
+        response.raise_for_status()
+        logging.info(f"✅ Message sent to chat {chat_id}")
+    except requests.RequestException as e:
+        logging.error(f"Failed to send message to chat {chat_id}: {e}")
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def fetch_dc_updates():
     """Fetches recent changes from Detective Conan Wiki."""
@@ -412,7 +429,7 @@ def fetch_ann_dc_news():
 def fetch_selected_articles(news_list):
     """Fetches article details concurrently."""
     posted_titles = load_posted_titles()
-    articles_to_fetch = [news for news in news_list if news["title"] not in posted_titles]
+    articles_to_fetch = [news for news in news_list if news["title"] not in posted_titles and "article_url" in news and "article" in news]
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {executor.submit(fetch_article_details, news["article_url"], news["article"]): news for news in articles_to_fetch}
