@@ -9,6 +9,7 @@ import pytz
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from tenacity import retry, stop_after_attempt, wait_exponential
+from supabase import create_client, Client
 
 # Setup logging
 logging.basicConfig(
@@ -21,6 +22,8 @@ logging.basicConfig(
 BOT_TOKEN = os.getenv("BOT_TOKEN")  # Fetch from environment variables
 CHAT_ID = os.getenv("CHAT_ID")  # Fetch from environment variables
 ADMIN_ID = os.getenv("ADMIN_ID")  # Optional: Admin user ID for private commands
+SUPABASE_URL = os.getenv("SUPABASE_URL")  # Supabase project URL
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")  # Supabase anon key
 POSTED_TITLES_FILE = "posted_titles.json"
 BASE_URL = "https://www.animenewsnetwork.com"
 BASE_URL_DC = "https://www.detectiveconanworld.com"
@@ -32,6 +35,14 @@ DEBUG_MODE = False  # Set True to test without date filter
 if not BOT_TOKEN or not CHAT_ID:
     logging.error("BOT_TOKEN or CHAT_ID is missing. Check environment variables.")
     exit(1)
+
+# Supabase setup
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    logging.info("Supabase connected")
+else:
+    logging.warning("Supabase credentials not provided, using JSON fallback")
 
 # Time Zone Handling
 utc_tz = pytz.utc
@@ -81,7 +92,16 @@ def get_bot_stats():
     return stats
 
 def load_posted_titles():
-    """Loads posted normalized keys from file."""
+    """Loads posted normalized keys from database or file."""
+    if supabase:
+        try:
+            today = datetime.now(local_tz).date()
+            response = supabase.table('posted_news').select('normalized_title').eq('posted_date', str(today)).execute()
+            return set(item['normalized_title'] for item in response.data)
+        except Exception as e:
+            logging.error(f"Error loading from Supabase: {e}")
+            # Fallback to JSON
+    # Fallback to JSON
     try:
         if os.path.exists(POSTED_TITLES_FILE):
             with open(POSTED_TITLES_FILE, "r", encoding="utf-8") as file:
@@ -92,9 +112,25 @@ def load_posted_titles():
         return set()
 
 def save_posted_title(title):
-    """Saves a normalized key to prevent duplicate posting."""
+    """Saves a normalized key to database or file."""
+    key = get_normalized_key(title)
+    today = datetime.now(local_tz).date()
+    
+    if supabase:
+        try:
+            supabase.table('posted_news').insert({
+                'normalized_title': key,
+                'posted_date': str(today),
+                'full_title': title,
+                'posted_at': datetime.now(utc_tz).isoformat()
+            }).execute()
+            return
+        except Exception as e:
+            logging.error(f"Error saving to Supabase: {e}")
+            # Fallback to JSON
+    
+    # Fallback to JSON
     try:
-        key = get_normalized_key(title)
         titles = load_posted_titles()
         titles.add(key)
         with open(POSTED_TITLES_FILE, "w", encoding="utf-8") as file:
@@ -514,10 +550,12 @@ def run_once():
     global today_local, last_run_time, posts_today
     current_date = datetime.now(local_tz).date()
     if current_date != today_local:
-        # New day, reset posted titles and posts_today
-        logging.info("New day detected, resetting posted titles and daily stats.")
-        with open(POSTED_TITLES_FILE, "w", encoding="utf-8") as file:
-            json.dump([], file)
+        # New day, reset daily stats (database handles persistence)
+        logging.info("New day detected, resetting daily stats.")
+        if not supabase:
+            # Only reset JSON if not using Supabase
+            with open(POSTED_TITLES_FILE, "w", encoding="utf-8") as file:
+                json.dump([], file)
         today_local = current_date
         posts_today = 0
     

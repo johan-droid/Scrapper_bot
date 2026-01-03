@@ -25,6 +25,29 @@ Fetches anime news from different sources and posts them to your Telegram group 
    - `BOT_TOKEN`: Your Telegram bot token
    - `CHAT_ID`: Your Telegram chat ID (group or channel)
    - `ADMIN_ID`: (Optional) Your Telegram user ID for /start command access
+   - `SUPABASE_URL`: (Optional) Your Supabase project URL
+   - `SUPABASE_KEY`: (Optional) Your Supabase anon key
+
+## Supabase Database Setup (Optional)
+If you want persistent storage to prevent reposts across deployments:
+
+1. Create a [Supabase](https://supabase.com) account
+2. Create a new project
+3. Go to SQL Editor and run:
+```sql
+CREATE TABLE posted_news (
+    id SERIAL PRIMARY KEY,
+    normalized_title TEXT NOT NULL,
+    full_title TEXT,
+    posted_date DATE NOT NULL,
+    posted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(normalized_title, posted_date)
+);
+```
+4. Get your project URL and anon key from Settings > API
+5. Set `SUPABASE_URL` and `SUPABASE_KEY` environment variables
+
+If Supabase is not configured, the bot falls back to local JSON storage.
 
 ## Local Testing
 Run: `python animebot.py`
