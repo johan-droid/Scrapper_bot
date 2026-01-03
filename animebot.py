@@ -642,6 +642,13 @@ def run_once():
     del news_list, dc_updates, tms_news, fandom_updates, ann_dc_news, all_updates
 
 if __name__ == "__main__":
+    # Fix 409 error: Clear existing webhook
+    try:
+        requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook", timeout=10)
+        logging.info("Webhook cleared - polling ready")
+    except Exception as e:
+        logging.error(f"Failed to clear webhook: {e}")
+
     # Start the bot loop in a background thread
     def bot_loop():
         # Start update handler in a separate thread (low priority)
