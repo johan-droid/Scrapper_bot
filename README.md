@@ -68,10 +68,13 @@ Run: `python animebot.py`
    - **Environment Variables**:
      - `BOT_TOKEN`: Your Telegram bot token
      - `CHAT_ID`: Your Telegram chat ID
+     - `ADMIN_ID`: (Optional) Your Telegram user ID
+     - `SUPABASE_URL`: (Optional) Your Supabase URL
+     - `SUPABASE_KEY`: (Optional) Your Supabase key
 
 4. **Deploy**: Click "Create Background Worker". It will build and start automatically.
 
-5. **Monitor**: Check logs in the Render dashboard. The bot will run continuously, fetching news every 24 hours.
+5. **Monitor**: Check logs in the Render dashboard. The bot will run continuously, fetching news every 4 hours.
 
 **Note**: Render's free tier provides 750 hours/month. The bot uses ~24 hours/month, well within limits.
 
