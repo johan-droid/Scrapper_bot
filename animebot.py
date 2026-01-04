@@ -17,7 +17,7 @@ except Exception as e:
     create_client = None
     Client = None
     
-from flask import Flask
+from flask import Flask, request
 from threading import Thread
 from dotenv import load_dotenv
 
@@ -91,7 +91,30 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return f"Bot is alive! 🤖 [Session: {SESSION_ID}]", 200
+    return f"Bot is alive! Session: {SESSION_ID}", 200
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Handle incoming webhook updates from Telegram"""
+    try:
+        update = request.get_json()
+        if not update:
+            return "OK", 200
+        
+        message = update.get('message', {})
+        if message.get('text') == '/start':
+            user_id = message.get('from', {}).get('id')
+            chat_id = message.get('chat', {}).get('id')
+            
+            # Only respond to admin or if no admin is set
+            if str(user_id) == ADMIN_ID or not ADMIN_ID:
+                stats = get_bot_stats()
+                send_message(chat_id, stats)
+        
+        return "OK", 200
+    except Exception as e:
+        logging.error(f"Webhook error: {e}")
+        return "OK", 200
 
 def keep_alive():
     """Pings the web server storage url to keep it awake on free tiers - every 5 minutes."""
@@ -130,15 +153,15 @@ def get_bot_stats():
     """Returns bot statistics."""
     uptime = datetime.now(utc_tz) - uptime_start
     stats = (
-        f"🤖 <b>Bot Statistics</b>\n"
-        f"🆔 Session: {SESSION_ID}\n"
-        f"⏰ Uptime: {uptime.days}d {uptime.seconds//3600}h {(uptime.seconds//60)%60}m\n"
-        f"📅 Last Run: {last_run_time.astimezone(local_tz).strftime('%Y-%m-%d %H:%M') if last_run_time else 'Never'}\n"
-        f"📊 Posts Today: {posts_today}\n"
-        f"📈 Total Posts: {total_posts}\n"
-        f"🌐 Sources: ANN, DC Wiki, TMS, Fandom, ANN DC\n"
-        f"🔄 Next Run: Every 4 hours\n"
-        f"✅ Status: Active"
+        f"<b>Bot Statistics</b>\n\n"
+        f"Session: {SESSION_ID}\n"
+        f"Uptime: {uptime.days}d {uptime.seconds//3600}h {(uptime.seconds//60)%60}m\n"
+        f"Last Run: {last_run_time.astimezone(local_tz).strftime('%Y-%m-%d %H:%M') if last_run_time else 'Never'}\n"
+        f"Posts Today: {posts_today}\n"
+        f"Total Posts: {total_posts}\n"
+        f"Sources: ANN, DC Wiki, TMS, Fandom, ANN DC\n"
+        f"Next Run: Every 4 hours\n"
+        f"Status: Active"
     )
     return stats
 
@@ -238,9 +261,9 @@ def fetch_anime_news():
                 link = title_tag.find("a")
                 article_url = f"{BASE_URL}{link['href']}" if link else None
                 news_list.append({"title": title, "article_url": article_url, "article": article})
-                logging.info(f"✅ Found today's news: {title}")
+                logging.info(f"Found today's news: {title}")
             else:
-                logging.info(f"⏩ Skipping (not today's news): {title} - Date: {news_date}")
+                logging.info(f"Skipping (not today's news): {title} - Date: {news_date}")
 
         logging.info(f"Filtered today's articles: {len(news_list)}")
         return news_list
@@ -259,7 +282,7 @@ def fetch_article_details(article_url, article):
     if thumbnail and thumbnail.get("data-src"):
         img_url = thumbnail["data-src"]
         image_url = f"{BASE_URL}{img_url}" if not img_url.startswith("http") else img_url
-        logging.info(f"🔹 Extracted Image URL: {image_url}")
+        logging.info(f"Extracted Image URL: {image_url}")
 
     if article_url:
         try:
@@ -289,7 +312,7 @@ def send_message(chat_id, text):
             timeout=10,
         )
         response.raise_for_status()
-        logging.info(f"✅ Message sent to chat {chat_id}")
+        logging.info(f"Message sent to chat {chat_id}")
     except requests.RequestException as e:
         logging.error(f"Failed to send message to chat {chat_id}: {e}")
 
@@ -338,7 +361,7 @@ def fetch_dc_updates():
                 summary = f"Edited by {user}. {comment}" if comment else f"Edited by {user}."
 
                 updates_list.append({"title": title, "summary": summary, "image": None})
-                logging.info(f"✅ Found today's wiki update: {title}")
+                logging.info(f"Found today's wiki update: {title}")
 
         logging.info(f"Filtered today's wiki updates: {len(updates_list)}")
         return updates_list
@@ -370,7 +393,7 @@ def fetch_tms_news():
                     news_title = f"TMS News: {title}"
                     summary = f"Read more: {BASE_URL_TMS}{url}" if not url.startswith("http") else f"Read more: {url}"
                     news_list.append({"title": news_title, "summary": summary, "image": None})
-                    logging.info(f"✅ Found TMS news: {title}")
+                    logging.info(f"Found TMS news: {title}")
 
         logging.info(f"Filtered TMS news: {len(news_list)}")
         return news_list
@@ -424,7 +447,7 @@ def fetch_fandom_updates():
                 summary = f"Edited by {user}. {comment}" if comment else f"Edited by {user}."
 
                 updates_list.append({"title": title, "summary": summary, "image": None})
-                logging.info(f"✅ Found today's Fandom wiki update: {title}")
+                logging.info(f"Found today's Fandom wiki update: {title}")
 
         logging.info(f"Filtered today's Fandom wiki updates: {len(updates_list)}")
         return updates_list
@@ -464,9 +487,9 @@ def fetch_ann_dc_news():
                 link = title_tag.find("a")
                 article_url = f"{BASE_URL}{link['href']}" if link else None
                 news_list.append({"title": f"ANN DC News: {title}", "article_url": article_url, "article": article})
-                logging.info(f"✅ Found today's DC news: {title}")
+                logging.info(f"Found today's DC news: {title}")
             else:
-                logging.info(f"⏩ Skipping (not today's DC news): {title} - Date: {news_date}")
+                logging.info(f"Skipping (not today's DC news): {title} - Date: {news_date}")
 
         logging.info(f"Filtered today's DC articles: {len(news_list)}")
         return news_list
@@ -540,7 +563,7 @@ def send_to_telegram(title, image_url, summary):
                 timeout=6,
             )
             response.raise_for_status()
-            logging.info(f"✅ Posted with photo: {title}")
+            logging.info(f"Posted with photo: {title}")
             save_posted_title(title)
             posts_today += 1
             total_posts += 1
@@ -561,7 +584,7 @@ def send_to_telegram(title, image_url, summary):
             timeout=10,
         )
         response.raise_for_status()
-        logging.info(f"✅ Posted as text: {title}")
+        logging.info(f"Posted as text: {title}")
         save_posted_title(title)
         posts_today += 1
         total_posts += 1
@@ -579,6 +602,26 @@ def ping_bot():
         pass  # Silent success
     except requests.RequestException as e:
         logging.warning(f"Bot ping failed: {e}")
+
+def setup_webhook():
+    """Set up webhook for receiving Telegram updates"""
+    if not RENDER_EXTERNAL_URL:
+        logging.warning("RENDER_EXTERNAL_URL not set, webhook not configured")
+        return
+    
+    webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook",
+            json={"url": webhook_url},
+            timeout=10
+        )
+        if response.status_code == 200:
+            logging.info(f"Webhook set successfully: {webhook_url}")
+        else:
+            logging.error(f"Failed to set webhook: {response.text}")
+    except Exception as e:
+        logging.error(f"Error setting webhook: {e}")
 
 def run_once():
     global today_local, last_run_time, posts_today
@@ -633,7 +676,7 @@ def run_once():
     del news_list, dc_updates, tms_news, fandom_updates, ann_dc_news, all_updates
 
 if __name__ == "__main__":
-    logging.info(f"🚀 Starting bot instance [Session ID: {SESSION_ID}]")
+    logging.info(f"Starting bot instance [Session ID: {SESSION_ID}]")
     
     # Force stop all other bot instances by deleting webhook multiple times
     max_attempts = 5
@@ -646,22 +689,22 @@ if __name__ == "__main__":
                 timeout=10
             )
             if response.status_code == 200:
-                logging.info(f"✅ Webhook cleared (attempt {attempt + 1})")
+                logging.info(f"Webhook cleared (attempt {attempt + 1})")
             time.sleep(2)  # Wait between attempts
         except Exception as e:
             logging.error(f"Failed to clear webhook (attempt {attempt + 1}): {e}")
     
-    # Give more time for other instances to stop
-    logging.info("⏳ Waiting 10 seconds for other instances to stop...")
+    # Give time for other instances to stop
+    logging.info("Waiting 10 seconds for other instances to stop...")
     time.sleep(10)
     
-    logging.info("✅ This instance is now the primary bot")
+    # Now set up webhook for this instance
+    setup_webhook()
+    
+    logging.info("This instance is now the primary bot")
 
     # Start the bot loop in a background thread
     def bot_loop():
-        # Don't start update handler - it causes the 409 conflict
-        # We'll only use the bot for posting news, not handling commands for now
-        
         heartbeat_interval = 300  # 5 minutes
         last_heartbeat = time.time()
         
