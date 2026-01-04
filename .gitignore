@@ -154,8 +154,14 @@ cython_debug/
 .DS_Store
 Thumbs.db
 
+
 # Project Specific
 posted_titles.json
 anime_news_bot.log
 config.json
+test_scrape.py
 
+# Temporary files
+*.tmp
+*.bak
+*.swp
