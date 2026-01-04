@@ -28,12 +28,15 @@ local_tz = pytz.timezone("Asia/Kolkata")
 today_local = datetime.now(local_tz).date()
 
 session = requests.Session()
+session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+})
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def fetch_anime_news():
     """Fetches latest anime news from ANN."""
     try:
-        response = session.get(BASE_URL, timeout=5)
+        response = session.get(BASE_URL, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -76,8 +79,7 @@ def fetch_dc_updates():
     """Fetches recent changes from Detective Conan Wiki."""
     try:
         url = f"{BASE_URL_DC}/wiki/Special:RecentChanges"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
-        response = session.get(url, headers=headers, timeout=5)
+        response = session.get(url, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -126,7 +128,7 @@ def fetch_dc_updates():
 def fetch_tms_news():
     """Fetches latest news from TMS Detective Conan page."""
     try:
-        response = session.get(BASE_URL_TMS + "/detective-conan", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}, timeout=5)
+        response = session.get(BASE_URL_TMS + "/detective-conan", timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -156,8 +158,7 @@ def fetch_fandom_updates():
     """Fetches recent changes from Detective Conan Fandom Wiki."""
     try:
         url = f"{BASE_URL_FANDOM}/wiki/Special:RecentChanges"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
-        response = session.get(url, headers=headers, timeout=5)
+        response = session.get(url, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -206,7 +207,7 @@ def fetch_fandom_updates():
 def fetch_ann_dc_news():
     """Fetches latest Detective Conan news from ANN encyclopedia page."""
     try:
-        response = session.get(BASE_URL_ANN_DC, timeout=5)
+        response = session.get(BASE_URL_ANN_DC, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 

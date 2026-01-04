@@ -9,18 +9,26 @@ import pytz
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from tenacity import retry, stop_after_attempt, wait_exponential
-from supabase import create_client, Client
+try:
+    from supabase import create_client, Client
+except Exception as e:
+    logging.warning(f"Supabase import failed: {e}. Falling back to JSON storage.")
+    create_client = None
+    Client = None
+    
 from flask import Flask
 from threading import Thread
 from dotenv import load_dotenv
 
-load_dotenv()  # Load environment variables from .env file
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(env_path, override=True)  # Force load environment variables
 
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[logging.FileHandler("anime_news_bot.log"), logging.StreamHandler()],
+    force=True
 )
 
 # Configuration
@@ -43,12 +51,15 @@ if not BOT_TOKEN or not CHAT_ID:
     exit(1)
 
 # Supabase setup
-supabase: Client = None
-if SUPABASE_URL and SUPABASE_KEY:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    logging.info("Supabase connected")
+supabase = None
+if SUPABASE_URL and SUPABASE_KEY and create_client:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        logging.info("Supabase connected")
+    except Exception as e:
+        logging.error(f"Supabase init failed: {e}")
 else:
-    logging.warning("Supabase credentials not provided, using JSON fallback")
+    logging.warning("Supabase credentials not provided or library missing, using JSON fallback")
 
 # Time Zone Handling
 utc_tz = pytz.utc
@@ -56,6 +67,9 @@ local_tz = pytz.timezone("Asia/Kolkata")  # Change if needed
 today_local = datetime.now(local_tz).date()
 
 session = requests.Session()
+session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+})
 
 # Bot Stats
 last_run_time = None
@@ -187,7 +201,7 @@ def validate_image_url(image_url):
 def fetch_anime_news():
     """Fetches latest anime news from ANN."""
     try:
-        response = session.get(BASE_URL, timeout=5)
+        response = session.get(BASE_URL, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -239,7 +253,7 @@ def fetch_article_details(article_url, article):
 
     if article_url:
         try:
-            article_response = session.get(article_url, timeout=5)
+            article_response = session.get(article_url, timeout=15)
             article_response.raise_for_status()
             article_soup = BeautifulSoup(article_response.text, "html.parser")
             content_div = article_soup.find("div", class_="meat") or article_soup.find("div", class_="content")
@@ -274,8 +288,7 @@ def fetch_dc_updates():
     """Fetches recent changes from Detective Conan Wiki."""
     try:
         url = f"{BASE_URL_DC}/wiki/Special:RecentChanges"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
-        response = session.get(url, headers=headers, timeout=5)
+        response = session.get(url, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -328,7 +341,7 @@ def fetch_dc_updates():
 def fetch_tms_news():
     """Fetches latest news from TMS Detective Conan page."""
     try:
-        response = session.get(BASE_URL_TMS + "/detective-conan", headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}, timeout=5)
+        response = session.get(BASE_URL_TMS + "/detective-conan", timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -361,8 +374,7 @@ def fetch_fandom_updates():
     """Fetches recent changes from Detective Conan Fandom Wiki."""
     try:
         url = f"{BASE_URL_FANDOM}/wiki/Special:RecentChanges"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
-        response = session.get(url, headers=headers, timeout=5)
+        response = session.get(url, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -415,7 +427,7 @@ def fetch_fandom_updates():
 def fetch_ann_dc_news():
     """Fetches latest Detective Conan news from ANN encyclopedia page."""
     try:
-        response = session.get(BASE_URL_ANN_DC, timeout=5)
+        response = session.get(BASE_URL_ANN_DC, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -590,7 +602,7 @@ def handle_updates():
         except requests.RequestException as e:
             logging.warning(f"Update polling error: {e}")
             time.sleep(10)  # Back off on errors
-        time.sleep(30)  # Poll every 30 seconds
+        time.sleep(1)  # Poll frequently for better responsiveness
 
 def run_once():
     global today_local, last_run_time, posts_today
