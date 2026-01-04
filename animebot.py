@@ -90,14 +90,14 @@ def home():
     return "Bot is alive! 🤖", 200
 
 def keep_alive():
-    """Pings the web server storage url to keep it awake on free tiers."""
+    """Pings the web server storage url to keep it awake on free tiers - every 5 minutes."""
     if not RENDER_EXTERNAL_URL:
         return
         
     while True:
         try:
-            time.sleep(600)  # Ping every 10 minutes
-            response = requests.get(RENDER_EXTERNAL_URL)
+            time.sleep(300)  # Ping every 5 minutes (300 seconds)
+            response = requests.get(RENDER_EXTERNAL_URL, timeout=5)
             logging.info(f"Self-ping status: {response.status_code}")
         except Exception as e:
             logging.error(f"Self-ping failed: {e}")
@@ -657,10 +657,19 @@ def run_once():
     del news_list, dc_updates, tms_news, fandom_updates, ann_dc_news, all_updates
 
 if __name__ == "__main__":
-    # Fix 409 error: Clear existing webhook
+    # Fix 409 error: Force delete webhook and wait for confirmation
     try:
-        requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook", timeout=10)
-        logging.info("Webhook cleared - polling ready")
+        logging.info("Clearing any existing webhooks...")
+        response = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook",
+            json={"drop_pending_updates": True},  # Drop any pending updates to avoid conflicts
+            timeout=10
+        )
+        if response.status_code == 200:
+            logging.info("✅ Webhook cleared successfully - polling ready")
+            time.sleep(2)  # Give Telegram API time to process
+        else:
+            logging.warning(f"Webhook clear returned status {response.status_code}")
     except Exception as e:
         logging.error(f"Failed to clear webhook: {e}")
 
@@ -670,10 +679,10 @@ if __name__ == "__main__":
         update_thread = Thread(target=handle_updates, daemon=True, name="UpdateHandler")
         update_thread.start()
         
-        heartbeat_interval = 600  # 10 minutes
+        heartbeat_interval = 300  # 5 minutes (changed from 600)
         last_heartbeat = time.time()
         
-        # Start keep-alive pinger in background
+        # Start keep-alive pinger in background (now pings every 5 minutes)
         if RENDER_EXTERNAL_URL:
              ping_thread = Thread(target=keep_alive, daemon=True, name="Pinger")
              ping_thread.start()
@@ -692,7 +701,7 @@ if __name__ == "__main__":
             logging.info("Sleeping for 4 hours...")
             
             # Sleep in chunks to allow for graceful shutdown
-            for _ in range(144):  # 144 * 100 = 14400 seconds
+            for _ in range(144):  # 144 * 100 = 14400 seconds = 4 hours
                 time.sleep(100)
 
     # Start bot thread
