@@ -221,7 +221,7 @@ def fetch_anime_news():
             if not title_tag or not date_tag:
                 continue
 
-            title = title_tag.get_text(strip=True)
+            title = title_tag.get_text(" ", strip=True)
             date_str = date_tag["datetime"]  
             try:
                 news_date = datetime.fromisoformat(date_str).astimezone(local_tz).date()
@@ -322,7 +322,7 @@ def fetch_dc_updates():
                 title_tag = change.find("a", class_="mw-changeslist-title")
                 if not title_tag:
                     continue
-                page_title = title_tag.get_text(strip=True)
+                page_title = title_tag.get_text(" ", strip=True)
                 user_tag = change.find("a", class_="mw-userlink")
                 user = user_tag.get_text(strip=True) if user_tag else "Unknown"
                 comment_tag = change.find("span", class_="comment")
@@ -358,7 +358,7 @@ def fetch_tms_news():
             # Find the following links
             news_links = parent.find_next_siblings("a")[:5]  # First 5 news items
             for link in news_links:
-                title = link.get_text(strip=True)
+                title = link.get_text(" ", strip=True)
                 url = link.get("href")
                 if title and url:
                     # Create a title
@@ -408,7 +408,7 @@ def fetch_fandom_updates():
                 title_tag = change.find("a", class_="mw-changeslist-title")
                 if not title_tag:
                     continue
-                page_title = title_tag.get_text(strip=True)
+                page_title = title_tag.get_text(" ", strip=True)
                 user_tag = change.find("a", class_="mw-userlink")
                 user = user_tag.get_text(strip=True) if user_tag else "Unknown"
                 comment_tag = change.find("span", class_="comment")
@@ -447,7 +447,7 @@ def fetch_ann_dc_news():
             if not title_tag or not date_tag:
                 continue
 
-            title = title_tag.get_text(strip=True)
+            title = title_tag.get_text(" ", strip=True)
             date_str = date_tag["datetime"]  
             try:
                 news_date = datetime.fromisoformat(date_str).astimezone(local_tz).date()
@@ -510,17 +510,12 @@ def send_to_telegram(title, image_url, summary):
     # Clean title
     clean_title = get_normalized_key(title)
     
-    # Format as JSON-style message
-    json_message = f"""�️‍♂️ <b>SECRET INTELLIGENCE REPORT</b> �️‍♂️
+    # Format as standard news message
+    json_message = f"""<b>{escape_html(clean_title)}</b>
 
-<pre>{{
-  "case_file": "{escape_html(clean_title)}",
-  "intel": "{escape_html(summary) if summary else 'Details Classified'}",
-  "source": "{source}",
-  "time": "{datetime.now(utc_tz).strftime('%Y-%m-%d %H:%M:%S UTC')}"
-}}</pre>
+{escape_html(summary) if summary else 'No summary available.'}
 
-🎀 <i>There is always only one truth!</i>"""
+<i>Source: {source}</i>"""
 
     logging.info(f"Sending to Telegram - Title: {title}")
     logging.info(f"Image URL: {image_url}")
