@@ -203,13 +203,15 @@ def update_uptime():
             bot_started = datetime.fromisoformat(bot_data['bot_started_at'].replace('Z', '+00:00'))
             total_uptime = int((now - bot_started).total_seconds() / 60)
             
-            # Calculate downtime (time between last_seen and now if > 10 minutes)
+            # Calculate downtime (time between last_seen and now if > 5 hours)
             last_seen = datetime.fromisoformat(bot_data['last_seen'].replace('Z', '+00:00'))
             gap_minutes = int((now - last_seen).total_seconds() / 60)
             
             additional_downtime = 0
-            if gap_minutes > 10:  # Consider downtime if gap > 10 minutes
-                additional_downtime = gap_minutes - 5  # Subtract 5 min grace period
+            # Only count gaps > 5 hours as downtime (one 4-hour cycle + 1-hour buffer)
+            if gap_minutes > 300:  # 5 hours = 300 minutes
+                additional_downtime = gap_minutes - 300  # Subtract the 5-hour threshold
+                logging.info(f"⚠️ Downtime detected: {gap_minutes} min gap, adding {additional_downtime} min downtime")
             
             new_downtime = bot_data.get('total_downtime_minutes', 0) + additional_downtime
             
