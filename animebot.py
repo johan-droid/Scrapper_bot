@@ -330,7 +330,7 @@ def fetch_article_details(article_url, article):
             time_tag = article_soup.find("time", {"itemprop": "datePublished"})
             if time_tag and time_tag.get("datetime"):
                 try:
-                    article_date = datetime.fromisoformat(time_tag["datetime"]).astimezone(local_tz).strftime("%B %d, %Y at %H:%M")
+                    article_date = datetime.fromisoformat(time_tag["datetime"]).astimezone(local_tz).strftime("%b %d, %Y %I:%M %p")
                 except:
                     pass
             
@@ -340,7 +340,7 @@ def fetch_article_details(article_url, article):
                 for p in paragraphs:
                     text = p.get_text(strip=True)
                     if len(text) > 50:
-                        summary = text[:400] + "..." if len(text) > 400 else text
+                        summary = text[:350] + "..." if len(text) > 350 else text
                         break
                         
         except requests.RequestException as e:
@@ -568,7 +568,7 @@ def fetch_selected_articles(news_list):
                 news["date"] = None
 
 def create_beautiful_message(title, summary, source, article_url, date_str, video_url):
-    """Creates a beautiful professional formatted message with bold fonts and emojis."""
+    """Creates a compact, elegant, and visually appealing message."""
     clean_title = get_normalized_key(title)
     
     # Get appropriate emoji for source
@@ -577,37 +577,34 @@ def create_beautiful_message(title, summary, source, article_url, date_str, vide
         "Detective Conan Wiki": "🔍",
         "TMS Entertainment": "🎥",
         "Fandom Wiki": "📚",
-        "ANN DC": "🕵️‍♂️"
+        "ANN DC": "🕵️"
     }.get(source, "📢")
     
-    # Create beautiful message with proper spacing and bold formatting
-    message = f"""📰 <b>A N I M E  N E W S  U P D A T E</b> {source_emoji}
+    # Compact and elegant design
+    message = f"""┌──────────────────────────╮
+  📰 <b>ANIME NEWS UPDATE</b> {source_emoji}
+└──────────────────────────╭
 
-━━━━━━━━━━━━━━━━━━━━━━━
+<b>▸ {escape_html(clean_title)}</b>
 
-<b>🎨 T i t l e :</b>
-{escape_html(clean_title)}
-
-━━━━━━━━━━━━━━━━━━━━━━━
-
-<b>📖 S u m m a r y :</b>
-{escape_html(summary) if summary else 'No summary available.'}
-"""
+{escape_html(summary) if summary else 'No summary available.'}"""
     
-    # Add date if available
+    # Footer section with metadata
+    footer_items = []
+    
     if date_str:
-        message += f"\n━━━━━━━━━━━━━━━━━━━━━━━\n\n<b>📅 P u b l i s h e d :</b>  {date_str}\n"
+        footer_items.append(f"📅 {date_str}")
     
-    # Add video link if available
     if video_url:
-        message += f"\n<b>🎥 V i d e o :</b>  <a href='{video_url}'>Watch Trailer</a>\n"
+        footer_items.append(f"<a href='{video_url}'>🎥 Watch Video</a>")
     
-    # Add read more link
     if article_url:
-        message += f"\n<b>🔗 R e a d   M o r e :</b>  <a href='{article_url}'>Full Article</a>\n"
+        footer_items.append(f"<a href='{article_url}'>🔗 Read More</a>")
     
-    # Add source footer
-    message += f"\n━━━━━━━━━━━━━━━━━━━━━━━\n\n<b>🏷️ S o u r c e :</b>  {source}"
+    if footer_items:
+        message += "\n\n" + " • ".join(footer_items)
+    
+    message += f"\n\n──────────────────────────\n<i>🏷️ {source}</i>"
     
     return message
 
