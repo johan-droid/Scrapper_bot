@@ -68,7 +68,12 @@ today_local = datetime.now(local_tz).date()
 
 session = requests.Session()
 session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1"
 })
 
 # Bot Stats
@@ -185,8 +190,8 @@ def validate_image_url(image_url):
         return False
     try:
         # Fetch only the first 1KB to verify the image
-        headers = {"Range": "bytes=0-1023"}
-        response = session.get(image_url, headers=headers, timeout=5, stream=True)
+        headers = {"Range": "bytes=0-511"}
+        response = session.get(image_url, headers=headers, timeout=3, stream=True)
         response.raise_for_status()
         content_type = response.headers.get("content-type", "")
         if not content_type.startswith("image/"):
@@ -197,11 +202,11 @@ def validate_image_url(image_url):
         logging.warning(f"Invalid or inaccessible image URL {image_url}: {e}")
         return False
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=6))
 def fetch_anime_news():
     """Fetches latest anime news from ANN."""
     try:
-        response = session.get(BASE_URL, timeout=15)
+        response = session.get(BASE_URL, timeout=8)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -239,7 +244,7 @@ def fetch_anime_news():
         logging.error(f"Fetch error: {e}")
         return []
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=6))
 def fetch_article_details(article_url, article):
     """Fetches article image and summary."""
     image_url = None
@@ -253,7 +258,7 @@ def fetch_article_details(article_url, article):
 
     if article_url:
         try:
-            article_response = session.get(article_url, timeout=15)
+            article_response = session.get(article_url, timeout=8)
             article_response.raise_for_status()
             article_soup = BeautifulSoup(article_response.text, "html.parser")
             content_div = article_soup.find("div", class_="meat") or article_soup.find("div", class_="content")
@@ -283,12 +288,12 @@ def send_message(chat_id, text):
     except requests.RequestException as e:
         logging.error(f"Failed to send message to chat {chat_id}: {e}")
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=6))
 def fetch_dc_updates():
     """Fetches recent changes from Detective Conan Wiki."""
     try:
         url = f"{BASE_URL_DC}/wiki/Special:RecentChanges"
-        response = session.get(url, timeout=15)
+        response = session.get(url, timeout=8)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -337,11 +342,11 @@ def fetch_dc_updates():
         logging.error(f"Fetch DC updates error: {e}")
         return []
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=6))
 def fetch_tms_news():
     """Fetches latest news from TMS Detective Conan page."""
     try:
-        response = session.get(BASE_URL_TMS + "/detective-conan", timeout=15)
+        response = session.get(BASE_URL_TMS + "/detective-conan", timeout=8)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -369,12 +374,12 @@ def fetch_tms_news():
         logging.error(f"Fetch TMS news error: {e}")
         return []
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=6))
 def fetch_fandom_updates():
     """Fetches recent changes from Detective Conan Fandom Wiki."""
     try:
         url = f"{BASE_URL_FANDOM}/wiki/Special:RecentChanges"
-        response = session.get(url, timeout=15)
+        response = session.get(url, timeout=8)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -423,11 +428,11 @@ def fetch_fandom_updates():
         logging.error(f"Fetch Fandom updates error: {e}")
         return []
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=6))
 def fetch_ann_dc_news():
     """Fetches latest Detective Conan news from ANN encyclopedia page."""
     try:
-        response = session.get(BASE_URL_ANN_DC, timeout=15)
+        response = session.get(BASE_URL_ANN_DC, timeout=8)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
@@ -532,7 +537,7 @@ def send_to_telegram(title, image_url, summary):
                     "caption": json_message,
                     "parse_mode": "HTML",
                 },
-                timeout=10,
+                timeout=6,
             )
             response.raise_for_status()
             logging.info(f"✅ Posted with photo: {title}")
@@ -620,18 +625,18 @@ def run_once():
     logging.info("Fetching latest anime news...")
     logging.info(f"Today's date (local): {today_local}")
     
-    # Scrape sources with delays to reduce load spikes
+    # Scrape sources with minimal delays to reduce total response time
     news_list = fetch_anime_news()
-    time.sleep(3)  # Delay between sources
+    time.sleep(1)  # Reduced delay between sources
     
     dc_updates = fetch_dc_updates()
-    time.sleep(3)
+    time.sleep(1)
     
     tms_news = fetch_tms_news()
-    time.sleep(3)
+    time.sleep(1)
     
     fandom_updates = fetch_fandom_updates()
-    time.sleep(3)
+    time.sleep(1)
     
     ann_dc_news = fetch_ann_dc_news()
     
@@ -648,7 +653,7 @@ def run_once():
         if get_normalized_key(update["title"]) not in load_posted_titles():
             send_to_telegram(update["title"], update.get("image"), update["summary"])
             posted_count += 1
-            time.sleep(4)  # Increased delay between posts
+            time.sleep(2)  # Reduced delay between posts
     
     logging.info(f"Posted {posted_count} new updates this cycle")
     last_run_time = datetime.now(utc_tz)
