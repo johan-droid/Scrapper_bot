@@ -6,6 +6,7 @@ import os
 import json
 import logging
 import pytz
+import uuid
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -22,6 +23,9 @@ from dotenv import load_dotenv
 
 env_path = os.path.join(os.path.dirname(__file__), '.env')
 load_dotenv(env_path, override=True)  # Force load environment variables
+
+# Generate unique session ID for this instance
+SESSION_ID = str(uuid.uuid4())[:8]
 
 # Setup logging
 logging.basicConfig(
@@ -87,7 +91,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot is alive! 🤖", 200
+    return f"Bot is alive! 🤖 [Session: {SESSION_ID}]", 200
 
 def keep_alive():
     """Pings the web server storage url to keep it awake on free tiers - every 5 minutes."""
@@ -127,6 +131,7 @@ def get_bot_stats():
     uptime = datetime.now(utc_tz) - uptime_start
     stats = (
         f"🤖 <b>Bot Statistics</b>\n"
+        f"🆔 Session: {SESSION_ID}\n"
         f"⏰ Uptime: {uptime.days}d {uptime.seconds//3600}h {(uptime.seconds//60)%60}m\n"
         f"📅 Last Run: {last_run_time.astimezone(local_tz).strftime('%Y-%m-%d %H:%M') if last_run_time else 'Never'}\n"
         f"📊 Posts Today: {posts_today}\n"
@@ -575,35 +580,6 @@ def ping_bot():
     except requests.RequestException as e:
         logging.warning(f"Bot ping failed: {e}")
 
-def handle_updates():
-    """Polls for Telegram updates and handles commands (efficient polling)."""
-    update_id = 0
-    while True:
-        try:
-            # Poll every 30 seconds instead of continuously
-            response = session.get(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
-                params={"offset": update_id + 1, "timeout": 20, "limit": 5},  # Reduced timeout and limit
-                timeout=25
-            )
-            response.raise_for_status()
-            updates = response.json().get("result", [])
-            
-            for update in updates:
-                update_id = update["update_id"]
-                message = update.get("message")
-                if message and message.get("text") == "/start":
-                    user_id = message["from"]["id"]
-                    chat_id = message["chat"]["id"]
-                    if str(user_id) == ADMIN_ID or not ADMIN_ID:
-                        stats = get_bot_stats()
-                        send_message(chat_id, stats)
-                        time.sleep(1)  # Small delay after sending
-        except requests.RequestException as e:
-            logging.warning(f"Update polling error: {e}")
-            time.sleep(10)  # Back off on errors
-        time.sleep(1)  # Poll frequently for better responsiveness
-
 def run_once():
     global today_local, last_run_time, posts_today
     current_date = datetime.now(local_tz).date()
@@ -657,32 +633,39 @@ def run_once():
     del news_list, dc_updates, tms_news, fandom_updates, ann_dc_news, all_updates
 
 if __name__ == "__main__":
-    # Fix 409 error: Force delete webhook and wait for confirmation
-    try:
-        logging.info("Clearing any existing webhooks...")
-        response = requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook",
-            json={"drop_pending_updates": True},  # Drop any pending updates to avoid conflicts
-            timeout=10
-        )
-        if response.status_code == 200:
-            logging.info("✅ Webhook cleared successfully - polling ready")
-            time.sleep(2)  # Give Telegram API time to process
-        else:
-            logging.warning(f"Webhook clear returned status {response.status_code}")
-    except Exception as e:
-        logging.error(f"Failed to clear webhook: {e}")
+    logging.info(f"🚀 Starting bot instance [Session ID: {SESSION_ID}]")
+    
+    # Force stop all other bot instances by deleting webhook multiple times
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        try:
+            logging.info(f"Clearing webhooks (attempt {attempt + 1}/{max_attempts})...")
+            response = requests.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook",
+                json={"drop_pending_updates": True},
+                timeout=10
+            )
+            if response.status_code == 200:
+                logging.info(f"✅ Webhook cleared (attempt {attempt + 1})")
+            time.sleep(2)  # Wait between attempts
+        except Exception as e:
+            logging.error(f"Failed to clear webhook (attempt {attempt + 1}): {e}")
+    
+    # Give more time for other instances to stop
+    logging.info("⏳ Waiting 10 seconds for other instances to stop...")
+    time.sleep(10)
+    
+    logging.info("✅ This instance is now the primary bot")
 
     # Start the bot loop in a background thread
     def bot_loop():
-        # Start update handler in a separate thread (low priority)
-        update_thread = Thread(target=handle_updates, daemon=True, name="UpdateHandler")
-        update_thread.start()
+        # Don't start update handler - it causes the 409 conflict
+        # We'll only use the bot for posting news, not handling commands for now
         
-        heartbeat_interval = 300  # 5 minutes (changed from 600)
+        heartbeat_interval = 300  # 5 minutes
         last_heartbeat = time.time()
         
-        # Start keep-alive pinger in background (now pings every 5 minutes)
+        # Start keep-alive pinger in background (pings every 5 minutes)
         if RENDER_EXTERNAL_URL:
              ping_thread = Thread(target=keep_alive, daemon=True, name="Pinger")
              ping_thread.start()
