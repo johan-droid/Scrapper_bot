@@ -22,12 +22,10 @@ from threading import Thread
 from dotenv import load_dotenv
 
 env_path = os.path.join(os.path.dirname(__file__), '.env')
-load_dotenv(env_path, override=True)  # Force load environment variables
+load_dotenv(env_path, override=True)
 
-# Generate unique session ID for this instance
 SESSION_ID = str(uuid.uuid4())[:8]
 
-# Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -35,7 +33,6 @@ logging.basicConfig(
     force=True
 )
 
-# Configuration
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 ADMIN_ID = os.getenv("ADMIN_ID")
@@ -54,7 +51,6 @@ if not BOT_TOKEN or not CHAT_ID:
     logging.error("BOT_TOKEN or CHAT_ID is missing. Check environment variables.")
     exit(1)
 
-# Supabase setup
 supabase = None
 if SUPABASE_URL and SUPABASE_KEY and create_client:
     try:
@@ -65,7 +61,6 @@ if SUPABASE_URL and SUPABASE_KEY and create_client:
 else:
     logging.warning("Supabase credentials not provided or library missing, using JSON fallback")
 
-# Time Zone Handling
 utc_tz = pytz.utc
 local_tz = pytz.timezone("Asia/Kolkata")
 today_local = datetime.now(local_tz).date()
@@ -80,13 +75,11 @@ session.headers.update({
     "Upgrade-Insecure-Requests": "1"
 })
 
-# Bot Stats
 last_run_time = None
 posts_today = 0
 total_posts = 0
 uptime_start = datetime.now(utc_tz)
 
-# Flask Setup
 app = Flask(__name__)
 
 @app.route('/')
@@ -127,7 +120,6 @@ def keep_alive():
             logging.info(f"Self-ping status: {response.status_code}")
         except Exception as e:
             logging.error(f"Self-ping failed: {e}")
-
 
 def escape_html(text):
     """Escapes special characters for Telegram HTML formatting."""
@@ -229,7 +221,6 @@ def extract_video_url(soup, article_url):
     video_url = None
     
     try:
-        # Check for YouTube embeds
         youtube_iframe = soup.find('iframe', src=re.compile(r'youtube\.com/embed|youtu\.be'))
         if youtube_iframe:
             src = youtube_iframe.get('src', '')
@@ -239,7 +230,6 @@ def extract_video_url(soup, article_url):
                 logging.info(f"Found YouTube video: {video_url}")
                 return video_url
         
-        # Check for Twitter/X video embeds
         twitter_blockquote = soup.find('blockquote', class_='twitter-tweet')
         if twitter_blockquote:
             twitter_link = twitter_blockquote.find('a')
@@ -248,7 +238,6 @@ def extract_video_url(soup, article_url):
                 logging.info(f"Found Twitter video: {video_url}")
                 return video_url
         
-        # Check for direct video tags
         video_tag = soup.find('video')
         if video_tag:
             source_tag = video_tag.find('source')
@@ -259,7 +248,6 @@ def extract_video_url(soup, article_url):
                 logging.info(f"Found direct video: {video_url}")
                 return video_url
         
-        # Check for common video player divs
         video_players = soup.find_all('div', class_=re.compile(r'video|player|embed', re.IGNORECASE))
         for player in video_players:
             iframe = player.find('iframe')
@@ -325,24 +313,20 @@ def fetch_article_details(article_url, article):
     summary = "No summary available."
     article_date = None
 
-    # Extract thumbnail from list page
     thumbnail = article.find("div", class_="thumbnail lazyload")
     if thumbnail and thumbnail.get("data-src"):
         img_url = thumbnail["data-src"]
         image_url = f"{BASE_URL}{img_url}" if not img_url.startswith("http") else img_url
         logging.info(f"📸 Extracted Image URL: {image_url}")
 
-    # Fetch full article content
     if article_url:
         try:
             article_response = session.get(article_url, timeout=8)
             article_response.raise_for_status()
             article_soup = BeautifulSoup(article_response.text, "html.parser")
             
-            # Extract video
             video_url = extract_video_url(article_soup, article_url)
             
-            # Extract date from article page
             time_tag = article_soup.find("time", {"itemprop": "datePublished"})
             if time_tag and time_tag.get("datetime"):
                 try:
@@ -350,13 +334,12 @@ def fetch_article_details(article_url, article):
                 except:
                     pass
             
-            # Extract summary
             content_div = article_soup.find("div", class_="meat") or article_soup.find("div", class_="content")
             if content_div:
                 paragraphs = content_div.find_all("p")
                 for p in paragraphs:
                     text = p.get_text(strip=True)
-                    if len(text) > 50:  # Get first meaningful paragraph
+                    if len(text) > 50:
                         summary = text[:400] + "..." if len(text) > 400 else text
                         break
                         
@@ -584,39 +567,47 @@ def fetch_selected_articles(news_list):
                 news["summary"] = "Failed to fetch summary."
                 news["date"] = None
 
-def create_beautiful_message(title, summary, source, article_url, date_str):
-    """Creates a beautiful JSON-style formatted message."""
+def create_beautiful_message(title, summary, source, article_url, date_str, video_url):
+    """Creates a beautiful professional formatted message with bold fonts and emojis."""
     clean_title = get_normalized_key(title)
     
     # Get appropriate emoji for source
     source_emoji = {
-        "Anime News Network": "📰",
+        "Anime News Network": "🎬",
         "Detective Conan Wiki": "🔍",
-        "TMS Entertainment": "🎬",
+        "TMS Entertainment": "🎥",
         "Fandom Wiki": "📚",
-        "ANN DC": "🕵️"
+        "ANN DC": "🕵️‍♂️"
     }.get(source, "📢")
     
-    message = f"""╭─────────────────────╮
-│ <b>{source_emoji} ANIME NEWS UPDATE</b> │
-╰─────────────────────╯
+    # Create beautiful message with proper spacing and bold formatting
+    message = f"""📰 <b>A N I M E  N E W S  U P D A T E</b> {source_emoji}
 
-<b>📌 Title:</b>
+━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>🎨 T i t l e :</b>
 {escape_html(clean_title)}
 
-<b>📝 Summary:</b>
+━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>📖 S u m m a r y :</b>
 {escape_html(summary) if summary else 'No summary available.'}
 """
     
+    # Add date if available
     if date_str:
-        message += f"\n<b>📅 Published:</b> {date_str}\n"
+        message += f"\n━━━━━━━━━━━━━━━━━━━━━━━\n\n<b>📅 P u b l i s h e d :</b>  {date_str}\n"
     
+    # Add video link if available
+    if video_url:
+        message += f"\n<b>🎥 V i d e o :</b>  <a href='{video_url}'>Watch Trailer</a>\n"
+    
+    # Add read more link
     if article_url:
-        message += f"\n<b>🔗 Read More:</b> <a href='{article_url}'>Full Article</a>\n"
+        message += f"\n<b>🔗 R e a d   M o r e :</b>  <a href='{article_url}'>Full Article</a>\n"
     
-    message += f"\n<b>🏷️ Source:</b> {source}"
-    
-    message += "\n\n━━━━━━━━━━━━━━━━━━━"
+    # Add source footer
+    message += f"\n━━━━━━━━━━━━━━━━━━━━━━━\n\n<b>🏷️ S o u r c e :</b>  {source}"
     
     return message
 
@@ -639,34 +630,11 @@ def send_to_telegram(title, image_url, summary, video_url=None, article_url=None
             break
     
     # Create beautiful message
-    message = create_beautiful_message(title, summary, source, article_url, date_str)
+    message = create_beautiful_message(title, summary, source, article_url, date_str, video_url)
     
     logging.info(f"📤 Sending to Telegram - Title: {title}")
     
-    # Try sending with video first if available
-    if video_url:
-        try:
-            logging.info(f"🎥 Attempting to send video: {video_url}")
-            response = session.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                json={
-                    "chat_id": CHAT_ID,
-                    "text": message + f"\n\n<b>🎥 Video:</b> <a href='{video_url}'>Watch Here</a>",
-                    "parse_mode": "HTML",
-                    "disable_web_page_preview": False
-                },
-                timeout=10,
-            )
-            response.raise_for_status()
-            logging.info(f"✅ Posted with video preview: {title}")
-            save_posted_title(title)
-            posts_today += 1
-            total_posts += 1
-            return
-        except requests.RequestException as e:
-            logging.error(f"Failed to send with video for {title}: {e}")
-    
-    # Try sending with photo if video failed or not available
+    # Try sending with photo if available
     if image_url and validate_image_url(image_url):
         try:
             response = session.post(
