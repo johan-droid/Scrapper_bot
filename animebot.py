@@ -604,7 +604,7 @@ def create_beautiful_message(title, summary, source, article_url, date_str, vide
     if footer_items:
         message += "\n\n" + " • ".join(footer_items)
     
-    message += f"\n\n──────────────────────────\n<i>🏷️ {source}</i>"
+    message += f"\n\n──────────────────────────\n<i>🏷️ {source}</i>\n\n<b>Channel:</b> @Detective_Conan_News"
     
     return message
 
