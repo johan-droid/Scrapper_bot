@@ -76,8 +76,6 @@ session.headers.update({
 })
 
 last_run_time = None
-current_session_start = datetime.now(utc_tz)
-downtime_minutes = 0
 
 app = Flask(__name__)
 
@@ -140,32 +138,24 @@ def initialize_bot_stats():
         return
     
     try:
-        # Check if bot_stats table exists and has data
         response = supabase.table('bot_stats').select('*').limit(1).execute()
         
         if not response.data:
-            # Create initial bot stats record
             now = datetime.now(utc_tz)
             supabase.table('bot_stats').insert({
                 'bot_started_at': now.isoformat(),
                 'total_posts_all_time': 0,
-                'total_uptime_minutes': 0,
-                'total_downtime_minutes': 0,
                 'last_seen': now.isoformat()
             }).execute()
             logging.info("✅ Initialized bot_stats table")
         
-        # Check if daily_stats for today exists
         today = datetime.now(local_tz).date()
         daily_response = supabase.table('daily_stats').select('*').eq('date', str(today)).execute()
         
         if not daily_response.data:
-            # Create today's daily stats
             supabase.table('daily_stats').insert({
                 'date': str(today),
                 'posts_count': 0,
-                'uptime_minutes': 0,
-                'downtime_minutes': 0,
                 'session_start': datetime.now(utc_tz).isoformat()
             }).execute()
             logging.info(f"✅ Initialized daily_stats for {today}")
@@ -173,138 +163,42 @@ def initialize_bot_stats():
     except Exception as e:
         logging.error(f"Error initializing bot stats: {e}")
 
-def update_uptime():
-    """Updates uptime in database."""
-    if not supabase:
-        return
-    
-    try:
-        today = datetime.now(local_tz).date()
-        now = datetime.now(utc_tz)
-        
-        # Get daily stats
-        daily_response = supabase.table('daily_stats').select('*').eq('date', str(today)).execute()
-        
-        if daily_response.data:
-            daily_data = daily_response.data[0]
-            session_start = datetime.fromisoformat(daily_data['session_start'].replace('Z', '+00:00'))
-            uptime_minutes = int((now - session_start).total_seconds() / 60)
-            
-            # Update daily uptime
-            supabase.table('daily_stats').update({
-                'uptime_minutes': uptime_minutes,
-                'last_updated': now.isoformat()
-            }).eq('date', str(today)).execute()
-        
-        # Update global stats
-        bot_response = supabase.table('bot_stats').select('*').limit(1).execute()
-        if bot_response.data:
-            bot_data = bot_response.data[0]
-            bot_started = datetime.fromisoformat(bot_data['bot_started_at'].replace('Z', '+00:00'))
-            total_uptime = int((now - bot_started).total_seconds() / 60)
-            
-            # Calculate downtime (time between last_seen and now if > 5 hours)
-            last_seen = datetime.fromisoformat(bot_data['last_seen'].replace('Z', '+00:00'))
-            gap_minutes = int((now - last_seen).total_seconds() / 60)
-            
-            additional_downtime = 0
-            # Only count gaps > 5 hours as downtime (one 4-hour cycle + 1-hour buffer)
-            if gap_minutes > 300:  # 5 hours = 300 minutes
-                additional_downtime = gap_minutes - 300  # Subtract the 5-hour threshold
-                logging.info(f"⚠️ Downtime detected: {gap_minutes} min gap, adding {additional_downtime} min downtime")
-            
-            new_downtime = bot_data.get('total_downtime_minutes', 0) + additional_downtime
-            
-            supabase.table('bot_stats').update({
-                'total_uptime_minutes': total_uptime - new_downtime,
-                'total_downtime_minutes': new_downtime,
-                'last_seen': now.isoformat()
-            }).eq('id', bot_data['id']).execute()
-            
-    except Exception as e:
-        logging.error(f"Error updating uptime: {e}")
-
 def get_bot_stats():
-    """Returns comprehensive bot statistics from database."""
+    """Returns simple bot statistics."""
     if not supabase:
         return "<b>⚠️ Database not connected. Stats unavailable.</b>"
     
     try:
         today = datetime.now(local_tz).date()
-        now = datetime.now(utc_tz)
         
-        # Get today's stats
+        # Get today's post count
         daily_response = supabase.table('daily_stats').select('*').eq('date', str(today)).execute()
         today_posts = 0
-        today_uptime = 0
-        today_downtime = 0
-        
         if daily_response.data:
-            daily_data = daily_response.data[0]
-            today_posts = daily_data.get('posts_count', 0)
-            today_downtime = daily_data.get('downtime_minutes', 0)
-            
-            # Calculate current session uptime for today
-            session_start = datetime.fromisoformat(daily_data['session_start'].replace('Z', '+00:00'))
-            today_uptime = int((now - session_start).total_seconds() / 60)
+            today_posts = daily_response.data[0].get('posts_count', 0)
         
-        # Get all-time stats
+        # Get all-time post count
         bot_response = supabase.table('bot_stats').select('*').limit(1).execute()
         total_posts = 0
-        total_uptime = 0
-        total_downtime = 0
-        bot_started = None
-        
         if bot_response.data:
-            bot_data = bot_response.data[0]
-            total_posts = bot_data.get('total_posts_all_time', 0)
-            total_downtime = bot_data.get('total_downtime_minutes', 0)
-            bot_started = datetime.fromisoformat(bot_data['bot_started_at'].replace('Z', '+00:00'))
-            
-            # Calculate total uptime
-            total_minutes = int((now - bot_started).total_seconds() / 60)
-            total_uptime = total_minutes - total_downtime
+            total_posts = bot_response.data[0].get('total_posts_all_time', 0)
         
-        # Format uptimes
-        def format_time(minutes):
-            days = minutes // (24 * 60)
-            hours = (minutes % (24 * 60)) // 60
-            mins = minutes % 60
-            return f"{days}d {hours}h {mins}m"
-        
-        today_uptime_str = format_time(today_uptime)
-        today_downtime_str = format_time(today_downtime)
-        total_uptime_str = format_time(total_uptime)
-        total_downtime_str = format_time(total_downtime)
-        
-        bot_age = ""
-        if bot_started:
-            age_days = (now - bot_started).days
-            bot_age = f"{age_days} days ago" if age_days > 0 else "today"
+        # Count active sources (always 4)
+        num_sources = 4
         
         stats = (
-            f"<b>🤖 BOT STATISTICS</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"<b>📊 TODAY'S STATS</b> ({today.strftime('%b %d, %Y')})\n"
-            f"├ <b>Posts Today:</b> {today_posts}\n"
-            f"├ <b>Uptime Today:</b> {today_uptime_str}\n"
-            f"└ <b>Downtime Today:</b> {today_downtime_str}\n\n"
-            f"<b>📈 ALL-TIME STATS</b>\n"
-            f"├ <b>Total Posts:</b> {total_posts}\n"
-            f"├ <b>Total Uptime:</b> {total_uptime_str}\n"
-            f"├ <b>Total Downtime:</b> {total_downtime_str}\n"
-            f"└ <b>Bot Started:</b> {bot_age}\n\n"
-            f"<b>🔧 SYSTEM INFO</b>\n"
-            f"├ <b>Session ID:</b> <code>{SESSION_ID}</code>\n"
-            f"├ <b>Last Run:</b> {last_run_time.astimezone(local_tz).strftime('%I:%M %p') if last_run_time else 'Never'}\n"
-            f"└ <b>Status:</b> 🟢 Active\n\n"
-            f"<b>📡 Sources:</b>\n"
+            f"<b>🤖 Detective Conan News Bot</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📊 <b>Posts Today:</b> {today_posts}\n"
+            f"📊 <b>Total Posts:</b> {total_posts}\n"
+            f"📡 <b>Active Sources:</b> {num_sources}\n\n"
+            f"<b>Sources:</b>\n"
             f"• Anime News Network\n"
             f"• Detective Conan Wiki\n"
             f"• TMS Entertainment\n"
             f"• Fandom Wiki\n\n"
-            f"<b>⏰ Update Interval:</b> Every 4 hours\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━"
+            f"⏰ <b>Updates every 4 hours</b>\n"
+            f"🔔 <b>Status:</b> 🟢 Active"
         )
         return stats
         
@@ -321,12 +215,9 @@ def reset_daily_stats():
         today = datetime.now(local_tz).date()
         now = datetime.now(utc_tz)
         
-        # Create new daily stats for today
         supabase.table('daily_stats').insert({
             'date': str(today),
             'posts_count': 0,
-            'uptime_minutes': 0,
-            'downtime_minutes': 0,
             'session_start': now.isoformat()
         }).execute()
         
@@ -384,7 +275,8 @@ def save_posted_title(title):
                 bot_data = bot_response.data[0]
                 current_total = bot_data.get('total_posts_all_time', 0)
                 supabase.table('bot_stats').update({
-                    'total_posts_all_time': current_total + 1
+                    'total_posts_all_time': current_total + 1,
+                    'last_seen': now.isoformat()
                 }).eq('id', bot_data['id']).execute()
             
             return
@@ -771,7 +663,6 @@ def create_beautiful_message(title, summary, source, article_url, date_str, vide
     """Creates a compact, elegant, and visually appealing message."""
     clean_title = get_normalized_key(title)
     
-    # Get appropriate emoji for source
     source_emoji = {
         "Anime News Network": "🎬",
         "Detective Conan Wiki": "🔍",
@@ -780,7 +671,6 @@ def create_beautiful_message(title, summary, source, article_url, date_str, vide
         "ANN DC": "🕵️"
     }.get(source, "📢")
     
-    # Compact and elegant design
     message = f"""┌──────────────────────────╮
   📰 <b>ANIME NEWS UPDATE</b> {source_emoji}
 └──────────────────────────╭
@@ -789,7 +679,6 @@ def create_beautiful_message(title, summary, source, article_url, date_str, vide
 
 {escape_html(summary) if summary else 'No summary available.'}"""
     
-    # Footer section with metadata
     footer_items = []
     
     if date_str:
@@ -810,7 +699,6 @@ def create_beautiful_message(title, summary, source, article_url, date_str, vide
 
 def send_to_telegram(title, image_url, summary, video_url=None, article_url=None, date_str=None):
     """Posts news to Telegram with beautiful formatting."""
-    # Extract source from title prefix
     source_map = {
         'DC Wiki Update: ': "Detective Conan Wiki",
         'TMS News: ': "TMS Entertainment",
@@ -824,12 +712,10 @@ def send_to_telegram(title, image_url, summary, video_url=None, article_url=None
             source = src
             break
     
-    # Create beautiful message
     message = create_beautiful_message(title, summary, source, article_url, date_str, video_url)
     
     logging.info(f"📤 Sending to Telegram - Title: {title}")
     
-    # Try sending with photo if available
     if image_url and validate_image_url(image_url):
         try:
             response = session.post(
@@ -849,7 +735,6 @@ def send_to_telegram(title, image_url, summary, video_url=None, article_url=None
         except requests.RequestException as e:
             logging.error(f"Failed to send photo for {title}: {e}")
 
-    # Fallback to text-only message
     try:
         response = session.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
@@ -905,7 +790,6 @@ def midnight_check():
         reset_daily_stats()
         today_local = current_date
         
-        # Clear JSON file if not using Supabase
         if not supabase:
             with open(POSTED_TITLES_FILE, "w", encoding="utf-8") as file:
                 json.dump([], file)
@@ -913,11 +797,7 @@ def midnight_check():
 def run_once():
     global last_run_time
     
-    # Check for midnight reset
     midnight_check()
-    
-    # Update uptime
-    update_uptime()
     
     logging.info("🔍 Fetching latest anime news...")
     logging.info(f"📅 Today's date (local): {today_local}")
@@ -966,7 +846,6 @@ def run_once():
 if __name__ == "__main__":
     logging.info(f"🚀 Starting bot instance [Session ID: {SESSION_ID}]")
     
-    # Initialize database stats
     initialize_bot_stats()
     
     max_attempts = 5
@@ -1003,7 +882,6 @@ if __name__ == "__main__":
             current_time = time.time()
             if current_time - last_heartbeat >= heartbeat_interval:
                 ping_bot()
-                update_uptime()  # Update uptime every 5 minutes
                 last_heartbeat = current_time
             
             try:
