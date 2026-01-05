@@ -65,6 +65,31 @@ utc_tz = pytz.utc
 local_tz = pytz.timezone("Asia/Kolkata")
 today_local = datetime.now(local_tz).date()
 
+# Fixed-time scheduler constants
+SLOT_HOURS = [0, 4, 8, 12, 16, 20]  # IST fixed schedule
+SLOTS_PER_DAY = 6
+
+def now_local():
+    return datetime.now(local_tz)
+
+def slot_index(dt_local):
+    return dt_local.hour // 4  # 0..5
+
+def slot_start_for(dt_local):
+    h = (dt_local.hour // 4) * 4
+    return dt_local.replace(hour=h, minute=0, second=0, microsecond=0)
+
+def next_slot_start(dt_local):
+    cur = slot_start_for(dt_local)
+    if dt_local < cur:
+        return cur
+    nxt_h = ((dt_local.hour // 4) + 1) * 4
+    if nxt_h >= 24:
+        tomorrow = (dt_local + timedelta(days=1)).date()
+        return dt_local.replace(year=tomorrow.year, month=tomorrow.month, day=tomorrow.day,
+                                hour=0, minute=0, second=0, microsecond=0)
+    return dt_local.replace(hour=nxt_h, minute=0, second=0, microsecond=0)
+
 session = requests.Session()
 session.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -226,6 +251,90 @@ def reset_daily_stats():
     except Exception as e:
         logging.error(f"Error resetting daily stats: {e}")
 
+def ensure_daily_row(date_obj):
+    if not supabase:
+        return
+    try:
+        resp = supabase.table('daily_stats').select('*').eq('date', str(date_obj)).execute()
+        if not resp.data:
+            supabase.table('daily_stats').insert({
+                'date': str(date_obj),
+                'posts_count': 0,
+                'runs_completed': 0,
+                'last_slot_done': -1
+            }).execute()
+    except Exception as e:
+        logging.error(f"ensure_daily_row failed: {e}")
+
+def get_last_slot_done(date_obj):
+    if not supabase:
+        return -1
+    try:
+        resp = supabase.table('daily_stats').select('last_slot_done').eq('date', str(date_obj)).execute()
+        if resp.data:
+            return int(resp.data[0].get('last_slot_done', -1))
+    except Exception as e:
+        logging.error(f"get_last_slot_done failed: {e}")
+    return -1
+
+def mark_slot_done(date_obj, slot, run_posts_sent):
+    if not supabase:
+        return
+    try:
+        resp = supabase.table('daily_stats').select('*').eq('date', str(date_obj)).execute()
+        if not resp.data:
+            ensure_daily_row(date_obj)
+            resp = supabase.table('daily_stats').select('*').eq('date', str(date_obj)).execute()
+
+        row = resp.data[0]
+        runs_completed = int(row.get('runs_completed', 0))
+        last_slot = int(row.get('last_slot_done', -1))
+
+        # update only if progressing (prevents double counting if rerun)
+        if slot > last_slot:
+            supabase.table('daily_stats').update({
+                'runs_completed': runs_completed + 1,
+                'last_slot_done': slot,
+                'updated_at': datetime.now(utc_tz).isoformat()
+            }).eq('date', str(date_obj)).execute()
+    except Exception as e:
+        logging.error(f"mark_slot_done failed: {e}")
+
+def create_run(date_obj, slot, scheduled_at_local):
+    if not supabase:
+        return None
+    try:
+        scheduled_at_utc = scheduled_at_local.astimezone(utc_tz).isoformat()
+        started_at_utc = datetime.now(utc_tz).isoformat()
+        resp = supabase.table('runs').insert({
+            'date': str(date_obj),
+            'slot': slot,
+            'scheduled_at': scheduled_at_utc,
+            'started_at': started_at_utc,
+            'status': 'started',
+            'posts_sent': 0,
+            'source_counts': {}
+        }).execute()
+        return resp.data[0]['id'] if resp.data else None
+    except Exception as e:
+        logging.error(f"create_run failed: {e}")
+        return None
+
+def finish_run(run_id, status, posts_sent, source_counts, error=None):
+    if not supabase or not run_id:
+        return
+    try:
+        payload = {
+            'status': status,
+            'posts_sent': posts_sent,
+            'source_counts': source_counts,  # jsonb
+            'finished_at': datetime.now(utc_tz).isoformat(),
+            'error': error
+        }
+        supabase.table('runs').update(payload).eq('id', run_id).execute()
+    except Exception as e:
+        logging.error(f"finish_run failed: {e}")
+
 def load_posted_titles():
     """Loads posted normalized keys from database or file."""
     if supabase:
@@ -245,7 +354,7 @@ def load_posted_titles():
         logging.error("Error decoding posted_titles.json. Resetting file.")
         return set()
 
-def save_posted_title(title):
+def save_posted_title(title, run_id=None, slot=None):
     """Saves a normalized key to database and updates post counts."""
     key = get_normalized_key(title)
     today = datetime.now(local_tz).date()
@@ -254,12 +363,18 @@ def save_posted_title(title):
     if supabase:
         try:
             # Save the posted news
-            supabase.table('posted_news').insert({
+            insert_data = {
                 'normalized_title': key,
                 'posted_date': str(today),
                 'full_title': title,
                 'posted_at': now.isoformat()
-            }).execute()
+            }
+            if run_id is not None:
+                insert_data['run_id'] = run_id
+            if slot is not None:
+                insert_data['slot'] = slot
+                
+            supabase.table('posted_news').insert(insert_data).execute()
             
             # Update today's post count
             daily_response = supabase.table('daily_stats').select('*').eq('date', str(today)).execute()
@@ -385,7 +500,7 @@ def fetch_anime_news():
             if DEBUG_MODE or news_date == today_local:
                 link = title_tag.find("a")
                 article_url = f"{BASE_URL}{link['href']}" if link else None
-                news_list.append({"title": title, "article_url": article_url, "article": article})
+                news_list.append({"title": title, "article_url": article_url, "article": article, "source": "ANN"})
                 logging.info(f"✅ Found today's news: {title}")
             else:
                 logging.info(f"⏩ Skipping (not today's news): {title} - Date: {news_date}")
@@ -430,7 +545,7 @@ def fetch_article_details(article_url, article):
             if content_div:
                 paragraphs = content_div.find_all("p")
                 for p in paragraphs:
-                    text = p.get_text(strip=True)
+                    text = p.get_text(" ", strip=True)
                     if len(text) > 50:
                         summary = text[:350] + "..." if len(text) > 350 else text
                         break
@@ -503,7 +618,7 @@ def fetch_dc_updates():
                 title = f"DC Wiki Update: {page_title}"
                 summary = f"Edited by {user}. {comment}" if comment else f"Edited by {user}."
 
-                updates_list.append({"title": title, "summary": summary, "image": None, "video": None})
+                updates_list.append({"title": title, "summary": summary, "image": None, "video": None, "source": "DCW"})
                 logging.info(f"✅ Found today's wiki update: {title}")
 
         logging.info(f"Filtered today's wiki updates: {len(updates_list)}")
@@ -532,7 +647,7 @@ def fetch_tms_news():
                 if title and url:
                     news_title = f"TMS News: {title}"
                     summary = f"Read more: {BASE_URL_TMS}{url}" if not url.startswith("http") else f"Read more: {url}"
-                    news_list.append({"title": news_title, "summary": summary, "image": None, "video": None})
+                    news_list.append({"title": news_title, "summary": summary, "image": None, "video": None, "source": "TMS"})
                     logging.info(f"✅ Found TMS news: {title}")
 
         logging.info(f"Filtered TMS news: {len(news_list)}")
@@ -583,7 +698,7 @@ def fetch_fandom_updates():
                 title = f"Fandom Wiki Update: {page_title}"
                 summary = f"Edited by {user}. {comment}" if comment else f"Edited by {user}."
 
-                updates_list.append({"title": title, "summary": summary, "image": None, "video": None})
+                updates_list.append({"title": title, "summary": summary, "image": None, "video": None, "source": "FANDOM"})
                 logging.info(f"✅ Found today's Fandom wiki update: {title}")
 
         logging.info(f"Filtered today's Fandom wiki updates: {len(updates_list)}")
@@ -623,7 +738,7 @@ def fetch_ann_dc_news():
             if DEBUG_MODE or news_date == today_local:
                 link = title_tag.find("a")
                 article_url = f"{BASE_URL}{link['href']}" if link else None
-                news_list.append({"title": f"ANN DC News: {title}", "article_url": article_url, "article": article})
+                news_list.append({"title": f"ANN DC News: {title}", "article_url": article_url, "article": article, "source": "ANN_DC"})
                 logging.info(f"✅ Found today's DC news: {title}")
             else:
                 logging.info(f"⏩ Skipping (not today's DC news): {title} - Date: {news_date}")
@@ -697,20 +812,32 @@ def create_beautiful_message(title, summary, source, article_url, date_str, vide
     
     return message
 
-def send_to_telegram(title, image_url, summary, video_url=None, article_url=None, date_str=None):
+def send_to_telegram(title, image_url, summary, source=None, video_url=None, article_url=None, date_str=None, run_id=None, slot=None):
     """Posts news to Telegram with beautiful formatting."""
-    source_map = {
-        'DC Wiki Update: ': "Detective Conan Wiki",
-        'TMS News: ': "TMS Entertainment",
-        'Fandom Wiki Update: ': "Fandom Wiki",
-        'ANN DC News: ': "ANN DC"
-    }
-    
-    source = "Anime News Network"
-    for prefix, src in source_map.items():
-        if title.startswith(prefix):
-            source = src
-            break
+    # Use provided source or fall back to title-based detection
+    if source is None:
+        source_map = {
+            'DC Wiki Update: ': "Detective Conan Wiki",
+            'TMS News: ': "TMS Entertainment",
+            'Fandom Wiki Update: ': "Fandom Wiki",
+            'ANN DC News: ': "ANN DC"
+        }
+        
+        source = "Anime News Network"
+        for prefix, src in source_map.items():
+            if title.startswith(prefix):
+                source = src
+                break
+    else:
+        # Map source codes to full names
+        source_name_map = {
+            "ANN": "Anime News Network",
+            "DCW": "Detective Conan Wiki", 
+            "TMS": "TMS Entertainment",
+            "FANDOM": "Fandom Wiki",
+            "ANN_DC": "ANN DC"
+        }
+        source = source_name_map.get(source, source)
     
     message = create_beautiful_message(title, summary, source, article_url, date_str, video_url)
     
@@ -730,7 +857,7 @@ def send_to_telegram(title, image_url, summary, video_url=None, article_url=None
             )
             response.raise_for_status()
             logging.info(f"✅ Posted with photo: {title}")
-            save_posted_title(title)
+            save_posted_title(title, run_id, slot)
             return
         except requests.RequestException as e:
             logging.error(f"Failed to send photo for {title}: {e}")
@@ -748,7 +875,7 @@ def send_to_telegram(title, image_url, summary, video_url=None, article_url=None
         )
         response.raise_for_status()
         logging.info(f"✅ Posted as text: {title}")
-        save_posted_title(title)
+        save_posted_title(title, run_id, slot)
     except requests.RequestException as e:
         logging.error(f"❌ Failed to send message for {title}: {e}")
 
@@ -831,6 +958,7 @@ def run_once():
                 update["title"], 
                 update.get("image"), 
                 update.get("summary", "No summary available."),
+                update.get("source"),
                 update.get("video"),
                 update.get("article_url"),
                 update.get("date")
@@ -842,6 +970,75 @@ def run_once():
     last_run_time = datetime.now(utc_tz)
     
     del news_list, dc_updates, tms_news, fandom_updates, ann_dc_news, all_updates
+
+def run_scheduled_slot(date_obj, slot, scheduled_local):
+    """Run a scheduled scraping slot with proper tracking."""
+    run_id = create_run(date_obj, slot, scheduled_local)
+    
+    try:
+        logging.info(f"🚀 Running slot {slot} for {date_obj} (scheduled for {scheduled_local.strftime('%H:%M')} IST)")
+        
+        # Track source counts
+        source_counts = {"ANN": 0, "DCW": 0, "TMS": 0, "FANDOM": 0, "ANN_DC": 0}
+        posted_count = 0
+        
+        # Fetch all news
+        news_list = fetch_anime_news()
+        time.sleep(1)
+        
+        dc_updates = fetch_dc_updates()
+        time.sleep(1)
+        
+        tms_news = fetch_tms_news()
+        time.sleep(1)
+        
+        fandom_updates = fetch_fandom_updates()
+        time.sleep(1)
+        
+        ann_dc_news = fetch_ann_dc_news()
+        
+        all_updates = news_list + dc_updates + tms_news + fandom_updates + ann_dc_news
+
+        if not all_updates:
+            logging.info("❌ No new articles or updates to post.")
+            finish_run(run_id, 'success', 0, source_counts)
+            mark_slot_done(date_obj, slot, 0)
+            return
+
+        fetch_selected_articles(news_list + ann_dc_news)
+        
+        for update in all_updates:
+            if get_normalized_key(update["title"]) not in load_posted_titles():
+                send_to_telegram(
+                    update["title"], 
+                    update.get("image"), 
+                    update.get("summary", "No summary available."),
+                    update.get("source"),
+                    update.get("video"),
+                    update.get("article_url"),
+                    update.get("date"),
+                    run_id,
+                    slot
+                )
+                posted_count += 1
+                
+                # Count by source
+                source = update.get("source", "ANN")
+                if source in source_counts:
+                    source_counts[source] += 1
+                
+                time.sleep(2)
+        
+        logging.info(f"✅ Posted {posted_count} new updates in slot {slot}")
+        finish_run(run_id, 'success', posted_count, source_counts)
+        mark_slot_done(date_obj, slot, posted_count)
+        
+        # Clean up
+        del news_list, dc_updates, tms_news, fandom_updates, ann_dc_news, all_updates
+        
+    except Exception as e:
+        logging.error(f"❌ Error in slot {slot}: {e}")
+        finish_run(run_id, 'failed', 0, {}, str(e))
 
 if __name__ == "__main__":
     logging.info(f"🚀 Starting bot instance [Session ID: {SESSION_ID}]")
@@ -875,8 +1072,8 @@ if __name__ == "__main__":
         last_heartbeat = time.time()
         
         if RENDER_EXTERNAL_URL:
-             ping_thread = Thread(target=keep_alive, daemon=True, name="Pinger")
-             ping_thread.start()
+            ping_thread = Thread(target=keep_alive, daemon=True, name="Pinger")
+            ping_thread.start()
         
         while True:
             current_time = time.time()
@@ -885,14 +1082,29 @@ if __name__ == "__main__":
                 last_heartbeat = current_time
             
             try:
-                run_once()
+                dt = now_local()
+                date_obj = dt.date()
+
+                ensure_daily_row(date_obj)
+
+                current_slot = slot_index(dt)
+                last_done = get_last_slot_done(date_obj)
+
+                # catch-up: run missing slots in order up to current slot
+                if last_done < current_slot:
+                    target_slot = last_done + 1
+                    scheduled_local = dt.replace(hour=target_slot * 4, minute=0, second=0, microsecond=0)
+                    run_scheduled_slot(date_obj, target_slot, scheduled_local)
+                    continue
+
+                # otherwise wait for next exact boundary
+                nxt = next_slot_start(dt)
+                sleep_s = max(1, int((nxt - dt).total_seconds()))
+                logging.info(f"⏳ Next scrape at {nxt.strftime('%Y-%m-%d %H:%M')} IST (sleep {sleep_s}s)")
+                time.sleep(sleep_s)
             except Exception as e:
-                logging.error(f"Critical error in run_once: {e}")
-                
-            logging.info("💤 Sleeping for 4 hours...")
-            
-            for _ in range(144):
-                time.sleep(100)
+                logging.error(f"Critical error in bot_loop: {e}")
+                time.sleep(60)  # Wait 1 minute before retrying
 
     bot_thread = Thread(target=bot_loop, daemon=True)
     bot_thread.start()
