@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from threading import Thread
 from concurrent.futures import ThreadPoolExecutor
 from tenacity import retry, stop_after_attempt, wait_exponential
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from flask import Flask, request
 from dotenv import load_dotenv
 
@@ -75,10 +77,11 @@ supabase = None
 if SUPABASE_URL and SUPABASE_KEY and create_client:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        logging.info("Supabase connected")
+        logging.info("Supabase connected successfully")
     except Exception as e:
         logging.error(f"Supabase init failed: {e}")
 
+# Session for web scraping (not for Telegram)
 session = requests.Session()
 session.headers.update(
     {
@@ -100,7 +103,7 @@ def now_local():
     return datetime.now(local_tz)
 
 def slot_index(dt_local: datetime) -> int:
-    return dt_local.hour // 4  # 0..5
+    return dt_local.hour // 4
 
 def slot_start_for(dt_local: datetime) -> datetime:
     h = (dt_local.hour // 4) * 4
@@ -120,6 +123,31 @@ def next_slot_start(dt_local: datetime) -> datetime:
             microsecond=0,
         )
     return dt_local.replace(hour=nxt_h, minute=0, second=0, microsecond=0)
+
+# =========================
+# TELEGRAM SESSION HELPER
+# =========================
+def get_fresh_telegram_session():
+    """
+    Create a fresh session for Telegram API calls to avoid stale connection issues.
+    Each call gets a new session with proper retry strategy.
+    """
+    tg_session = requests.Session()
+    
+    # Configure retry strategy for transient errors
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=2,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["POST", "GET"]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=1, pool_maxsize=1)
+    tg_session.mount("https://", adapter)
+    
+    # Force connection closure to prevent stale connections
+    tg_session.headers.update({"Connection": "close"})
+    
+    return tg_session
 
 # =========================
 # BASIC WEB + WEBHOOK
@@ -166,6 +194,7 @@ def escape_html(text):
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 def get_normalized_key(title):
+    """Extract normalized title for deduplication"""
     prefixes = ["DC Wiki Update: ", "TMS News: ", "Fandom Wiki Update: ", "ANN DC News: "]
     for p in prefixes:
         if title.startswith(p):
@@ -185,6 +214,7 @@ def initialize_bot_stats():
             supabase.table("bot_stats").insert(
                 {"bot_started_at": now, "total_posts_all_time": 0, "last_seen": now}
             ).execute()
+            logging.info("Bot stats initialized")
     except Exception as e:
         logging.error(f"initialize_bot_stats failed: {e}")
 
@@ -226,22 +256,26 @@ def get_simple_stats():
     if not supabase:
         return "<b>⚠️ Database not connected.</b>"
 
-    today = now_local().date()
-    ensure_daily_row(today)
+    try:
+        today = now_local().date()
+        ensure_daily_row(today)
 
-    daily = supabase.table("daily_stats").select("posts_count").eq("date", str(today)).limit(1).execute()
-    today_posts = int(daily.data[0]["posts_count"]) if daily.data else 0
+        daily = supabase.table("daily_stats").select("posts_count").eq("date", str(today)).limit(1).execute()
+        today_posts = int(daily.data[0]["posts_count"]) if daily.data else 0
 
-    bot = supabase.table("bot_stats").select("total_posts_all_time").limit(1).execute()
-    total_posts = int(bot.data[0]["total_posts_all_time"]) if bot.data else 0
+        bot = supabase.table("bot_stats").select("total_posts_all_time").limit(1).execute()
+        total_posts = int(bot.data[0]["total_posts_all_time"]) if bot.data else 0
 
-    return (
-        "<b>Detective Conan News Bot</b>\n"
-        "━━━━━━━━━━━━━━━━━━━\n\n"
-        f"• <b>Posts Today:</b> {today_posts}\n"
-        f"• <b>Total Posts:</b> {total_posts}\n"
-        f"• <b>Active Sources:</b> 4\n"
-    )
+        return (
+            "<b>Detective Conan News Bot</b>\n"
+            "━━━━━━━━━━━━━━━━━━━\n\n"
+            f"• <b>Posts Today:</b> {today_posts}\n"
+            f"• <b>Total Posts:</b> {total_posts}\n"
+            f"• <b>Active Sources:</b> 5\n"
+        )
+    except Exception as e:
+        logging.error(f"get_simple_stats failed: {e}")
+        return "<b>⚠️ Stats temporarily unavailable</b>"
 
 # =========================
 # SUPABASE: RUNS (UPSERT SAFE)
@@ -273,6 +307,7 @@ def create_or_reuse_run(date_obj, slot, scheduled_local):
 
     existing = get_run(date_obj, slot)
     if existing and existing[1] == "success":
+        logging.info(f"Slot {slot} already completed successfully")
         return None
 
     payload = {
@@ -309,6 +344,7 @@ def finish_run(run_id, status, posts_sent, source_counts, error=None):
                 "error": error,
             }
         ).eq("id", run_id).execute()
+        logging.info(f"Run {run_id} finished with status: {status}")
     except Exception as e:
         logging.error(f"finish_run failed: {e}")
 
@@ -340,25 +376,37 @@ def load_posted_titles_for_date(date_obj):
                 .eq("posted_date", str(date_obj))
                 .execute()
             )
-            return set(x["normalized_title"] for x in r.data)
+            titles = set(x["normalized_title"] for x in r.data)
+            logging.info(f"Loaded {len(titles)} posted titles from database")
+            return titles
         except Exception as e:
             logging.error(f"load_posted_titles_for_date failed: {e}")
 
     try:
         if os.path.exists(POSTED_TITLES_FILE):
             with open(POSTED_TITLES_FILE, "r", encoding="utf-8") as f:
-                return set(json.load(f))
-    except Exception:
-        pass
+                titles = set(json.load(f))
+                logging.info(f"Loaded {len(titles)} posted titles from JSON")
+                return titles
+    except Exception as e:
+        logging.error(f"Failed to load JSON fallback: {e}")
+    
     return set()
 
-def save_posted_fallback(normalized_title):
-    titles = load_posted_titles_for_date(now_local().date())
-    titles.add(normalized_title)
-    with open(POSTED_TITLES_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(titles), f)
+def save_posted_fallback(normalized_title, date_obj):
+    try:
+        titles = load_posted_titles_for_date(date_obj)
+        titles.add(normalized_title)
+        with open(POSTED_TITLES_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(titles), f)
+    except Exception as e:
+        logging.error(f"save_posted_fallback failed: {e}")
 
 def record_post(title, source_code, run_id, slot, posted_titles_set):
+    """
+    Record post in database BEFORE sending to Telegram.
+    This prevents duplicate posts even if Telegram sending fails.
+    """
     key = get_normalized_key(title)
     date_obj = now_local().date()
     now_utc = datetime.now(utc_tz).isoformat()
@@ -382,12 +430,13 @@ def record_post(title, source_code, run_id, slot, posted_titles_set):
             posted_titles_set.add(key)
             increment_post_counters(date_obj)
             return True
-        except Exception:
+        except Exception as e:
+            logging.error(f"record_post to Supabase failed: {e}")
             posted_titles_set.add(key)
             return False
 
     posted_titles_set.add(key)
-    save_posted_fallback(key)
+    save_posted_fallback(key, date_obj)
     return True
 
 # =========================
@@ -400,7 +449,8 @@ def validate_image_url(image_url):
         headers = {"Range": "bytes=0-511"}
         r = session.get(image_url, headers=headers, timeout=5, stream=True)
         r.raise_for_status()
-        return r.headers.get("content-type", "").startswith("image/")
+        content_type = r.headers.get("content-type", "")
+        return content_type.startswith("image/")
     except Exception:
         return False
 
@@ -419,7 +469,7 @@ def extract_video_url(soup):
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=6))
 def fetch_anime_news():
     try:
-        r = session.get(BASE_URL, timeout=12)
+        r = session.get(BASE_URL, timeout=15)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
 
@@ -443,6 +493,8 @@ def fetch_anime_news():
                 link = title_tag.find("a")
                 article_url = f"{BASE_URL}{link['href']}" if link else None
                 out.append({"source": "ANN", "title": title, "article_url": article_url, "article": article})
+        
+        logging.info(f"Fetched {len(out)} ANN articles")
         return out
     except Exception as e:
         logging.error(f"fetch_anime_news failed: {e}")
@@ -451,7 +503,7 @@ def fetch_anime_news():
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=6))
 def fetch_ann_dc_news():
     try:
-        r = session.get(BASE_URL_ANN_DC, timeout=12)
+        r = session.get(BASE_URL_ANN_DC, timeout=15)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
 
@@ -475,6 +527,8 @@ def fetch_ann_dc_news():
                 link = title_tag.find("a")
                 article_url = f"{BASE_URL}{link['href']}" if link else None
                 out.append({"source": "ANN_DC", "title": f"ANN DC News: {title}", "article_url": article_url, "article": article})
+        
+        logging.info(f"Fetched {len(out)} ANN DC articles")
         return out
     except Exception as e:
         logging.error(f"fetch_ann_dc_news failed: {e}")
@@ -494,7 +548,7 @@ def fetch_article_details(article_url, article):
 
     if article_url:
         try:
-            r = session.get(article_url, timeout=12)
+            r = session.get(article_url, timeout=15)
             r.raise_for_status()
             s = BeautifulSoup(r.text, "html.parser")
 
@@ -514,8 +568,8 @@ def fetch_article_details(article_url, article):
                     if len(txt) > 50:
                         summary = txt[:350] + "..." if len(txt) > 350 else txt
                         break
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning(f"Failed to fetch article details: {e}")
 
     return {"image": image_url, "summary": summary, "video": video_url, "date": date_str}
 
@@ -526,12 +580,13 @@ def fetch_selected_articles(news_list):
         for f in futures:
             x = futures[f]
             try:
-                res = f.result(timeout=15)
+                res = f.result(timeout=20)
                 x["image"] = res["image"]
                 x["summary"] = res["summary"]
                 x["video"] = res["video"]
                 x["date"] = res["date"]
-            except Exception:
+            except Exception as e:
+                logging.warning(f"Article fetch timeout: {e}")
                 x["image"] = None
                 x["summary"] = "Failed to fetch summary."
                 x["video"] = None
@@ -580,6 +635,8 @@ def fetch_dc_updates():
                 title = f"DC Wiki Update: {page_title}"
                 summary = f"Edited by {user}. {comment}".strip()
                 out.append({"source": "DCW", "title": title, "summary": summary})
+        
+        logging.info(f"Fetched {len(out)} DC Wiki updates")
         return out
     except Exception as e:
         logging.error(f"fetch_dc_updates failed: {e}")
@@ -605,6 +662,8 @@ def fetch_tms_news():
                 title = f"TMS News: {t}"
                 summary = f"Read more: {href}" if href.startswith("http") else f"Read more: {BASE_URL_TMS}{href}"
                 out.append({"source": "TMS", "title": title, "summary": summary})
+        
+        logging.info(f"Fetched {len(out)} TMS news items")
         return out
     except Exception as e:
         logging.error(f"fetch_tms_news failed: {e}")
@@ -653,23 +712,63 @@ def fetch_fandom_updates():
                 title = f"Fandom Wiki Update: {page_title}"
                 summary = f"Edited by {user}. {comment}".strip()
                 out.append({"source": "FANDOM", "title": title, "summary": summary})
+        
+        logging.info(f"Fetched {len(out)} Fandom updates")
         return out
     except Exception as e:
         logging.error(f"fetch_fandom_updates failed: {e}")
         return []
 
 # =========================
-# TELEGRAM SEND
+# TELEGRAM SEND (FIXED WITH RETRIES)
 # =========================
-def send_message(chat_id, text):
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=4, max=20))
+def send_telegram_photo(chat_id, photo_url, caption):
+    """Send photo with fresh connection and automatic retries"""
+    tg_session = get_fresh_telegram_session()
     try:
-        session.post(
+        response = tg_session.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+            data={"chat_id": chat_id, "photo": photo_url, "caption": caption, "parse_mode": "HTML"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return True
+    finally:
+        tg_session.close()
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=4, max=20))
+def send_telegram_message(chat_id, text):
+    """Send text message with fresh connection and automatic retries"""
+    tg_session = get_fresh_telegram_session()
+    try:
+        response = tg_session.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return True
+    finally:
+        tg_session.close()
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=4, max=20))
+def send_message(chat_id, text):
+    """Send message for /start command with retries"""
+    tg_session = get_fresh_telegram_session()
+    try:
+        response = tg_session.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
             json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
-            timeout=15,
-        ).raise_for_status()
+            timeout=30,
+        )
+        response.raise_for_status()
+        return True
     except Exception as e:
-        logging.error(f"send_message failed: {e}")
+        logging.error(f"send_message to {chat_id} failed: {e}")
+        raise
+    finally:
+        tg_session.close()
 
 def build_message(item):
     source_code = item.get("source", "ANN")
@@ -705,50 +804,73 @@ def build_message(item):
     return "\n".join(lines)
 
 def send_to_telegram(item, run_id, slot, posted_titles_set):
+    """
+    Send news to Telegram with proper deduplication and error handling.
+    Records in database BEFORE sending to prevent duplicate spam.
+    """
     source_code = item.get("source", "ANN")
     title = item["title"]
+    key = get_normalized_key(title)
+    
+    # Check if already posted
+    if key in posted_titles_set:
+        logging.info(f"⊘ Duplicate skipped: {key[:60]}")
+        return False
+    
+    # CRITICAL: Record in database BEFORE sending to prevent duplicates
+    if not record_post(title, source_code, run_id, slot, posted_titles_set):
+        logging.warning(f"⚠ Already in database: {key[:60]}")
+        return False
+    
     message = build_message(item)
-
+    send_success = False
+    
+    # Try sending with photo first
     image_url = item.get("image")
     if image_url and validate_image_url(image_url):
         try:
-            session.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-                data={"chat_id": CHAT_ID, "photo": image_url, "caption": message, "parse_mode": "HTML"},
-                timeout=20,
-            ).raise_for_status()
-            return record_post(title, source_code, run_id, slot, posted_titles_set)
+            send_telegram_photo(CHAT_ID, image_url, message)
+            logging.info(f"✓ Photo sent: {key[:60]}")
+            send_success = True
         except Exception as e:
-            logging.error(f"sendPhoto failed: {e}")
-
-    try:
-        session.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML", "disable_web_page_preview": False},
-            timeout=20,
-        ).raise_for_status()
-        return record_post(title, source_code, run_id, slot, posted_titles_set)
-    except Exception as e:
-        logging.error(f"sendMessage failed: {e}")
-        return False
+            logging.warning(f"⚠ Photo failed after retries, trying text-only: {str(e)[:100]}")
+    
+    # Fallback to text-only message
+    if not send_success:
+        try:
+            send_telegram_message(CHAT_ID, message)
+            logging.info(f"✓ Text sent: {key[:60]}")
+            send_success = True
+        except Exception as e:
+            logging.error(f"✗ All send attempts failed: {key[:60]} - {str(e)[:100]}")
+            # Note: Still recorded in DB to prevent infinite retry spam
+    
+    return send_success
 
 # =========================
 # SLOT RUNNER
 # =========================
 def run_slot(date_obj, slot, scheduled_local):
+    logging.info(f"═══════════════════════════════════════")
     logging.info(f"RUN slot={slot} date={date_obj} scheduled={scheduled_local.strftime('%H:%M')} IST")
+    logging.info(f"═══════════════════════════════════════")
+    
     ensure_daily_row(date_obj)
 
     run_id = create_or_reuse_run(date_obj, slot, scheduled_local)
     if run_id is None:
+        logging.info("Slot already completed, skipping")
         return
 
     posted_titles_set = load_posted_titles_for_date(date_obj)
 
     posts_sent = 0
+    posts_attempted = 0
     source_counts = {"ANN": 0, "ANN_DC": 0, "DCW": 0, "TMS": 0, "FANDOM": 0}
 
     try:
+        # Fetch from all sources
+        logging.info("Fetching news from all sources...")
         ann = fetch_anime_news()
         ann_dc = fetch_ann_dc_news()
         fetch_selected_articles(ann + ann_dc)
@@ -758,50 +880,77 @@ def run_slot(date_obj, slot, scheduled_local):
         fandom = fetch_fandom_updates()
 
         items = ann + dcw + tms + fandom + ann_dc
+        logging.info(f"Total items fetched: {len(items)}")
 
+        # Send each item
         for item in items:
+            posts_attempted += 1
             if send_to_telegram(item, run_id, slot, posted_titles_set):
                 posts_sent += 1
                 sc = item.get("source", "ANN")
                 source_counts[sc] = source_counts.get(sc, 0) + 1
-                time.sleep(1.2)
+                time.sleep(1.5)  # Rate limiting between posts
 
         finish_run(run_id, "success", posts_sent, source_counts, None)
-        logging.info(f"DONE slot={slot} posted={posts_sent}")
+        logging.info(f"═══════════════════════════════════════")
+        logging.info(f"✓ SLOT {slot} COMPLETED: {posts_sent}/{posts_attempted} posts sent successfully")
+        logging.info(f"Source breakdown: {source_counts}")
+        logging.info(f"═══════════════════════════════════════")
     except Exception as e:
-        finish_run(run_id, "failed", posts_sent, source_counts, str(e))
-        logging.error(f"run_slot failed: {e}")
+        error_msg = str(e)[:200]
+        finish_run(run_id, "failed", posts_sent, source_counts, error_msg)
+        logging.error(f"✗ SLOT {slot} FAILED: {e}")
 
 # =========================
 # MAIN LOOP
 # =========================
 def scheduler_loop():
+    logging.info("Scheduler loop started")
+    
     while True:
-        dt = now_local()
-        date_obj = dt.date()
+        try:
+            dt = now_local()
+            date_obj = dt.date()
 
-        current_slot = slot_index(dt)
-        completed = completed_slots_today(date_obj)
+            current_slot = slot_index(dt)
+            completed = completed_slots_today(date_obj)
 
-        # catch-up: run missing slots <= current slot
-        missing = [s for s in range(0, current_slot + 1) if s not in completed]
-        if missing:
-            s = missing[0]
-            scheduled_local = dt.replace(hour=s * 4, minute=0, second=0, microsecond=0)
-            run_slot(date_obj, s, scheduled_local)
-            continue
+            # Catch-up: run missing slots <= current slot
+            missing = [s for s in range(0, current_slot + 1) if s not in completed]
+            if missing:
+                s = missing[0]
+                scheduled_local = dt.replace(hour=s * 4, minute=0, second=0, microsecond=0)
+                logging.info(f"Catching up on missed slot {s}")
+                run_slot(date_obj, s, scheduled_local)
+                continue
 
-        nxt = next_slot_start(dt)
-        sleep_s = max(1, int((nxt - dt).total_seconds()))
-        time.sleep(sleep_s)
+            # Wait for next slot
+            nxt = next_slot_start(dt)
+            sleep_s = max(1, int((nxt - dt).total_seconds()))
+            logging.info(f"Next slot at {nxt.strftime('%H:%M IST')}, sleeping {sleep_s}s")
+            time.sleep(min(sleep_s, 300))  # Wake up every 5 min to check
+            
+        except Exception as e:
+            logging.error(f"Scheduler loop error: {e}")
+            time.sleep(60)
 
 if __name__ == "__main__":
+    logging.info("=" * 60)
+    logging.info("Detective Conan News Bot Starting")
+    logging.info(f"Session ID: {SESSION_ID}")
+    logging.info(f"Timezone: {local_tz}")
+    logging.info(f"Supabase: {'Connected' if supabase else 'Disabled'}")
+    logging.info("=" * 60)
+    
     initialize_bot_stats()
 
     if RENDER_EXTERNAL_URL:
         Thread(target=keep_alive, daemon=True).start()
+        logging.info("Keep-alive thread started")
 
     Thread(target=scheduler_loop, daemon=True).start()
+    logging.info("Scheduler thread started")
 
     port = int(os.environ.get("PORT", 10000))
+    logging.info(f"Starting Flask server on port {port}")
     app.run(host="0.0.0.0", port=port)
