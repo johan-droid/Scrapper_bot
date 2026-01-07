@@ -801,6 +801,7 @@ def build_message(item):
         lines += ["", " • ".join(meta)]
 
     lines += ["", f"🛰️ <i>Source:</i> <b>{escape_html(src_label)}</b>"]
+    lines += ["", "Channel : @Detective_Conan_News"]
     return "\n".join(lines)
 
 def send_to_telegram(item, run_id, slot, posted_titles_set):
