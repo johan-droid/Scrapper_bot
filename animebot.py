@@ -13,7 +13,6 @@ from concurrent.futures import ThreadPoolExecutor
 from tenacity import retry, stop_after_attempt, wait_exponential
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from flask import Flask, request
 from dotenv import load_dotenv
 from collections import defaultdict
 
@@ -148,7 +147,6 @@ def get_scraping_session():
     
     return session
 
-app = Flask(__name__)
 
 # =========================
 # TIME/SLOT HELPERS
@@ -203,74 +201,6 @@ def get_fresh_telegram_session():
     
     return tg_session
 
-# =========================
-# BASIC WEB + WEBHOOK
-# =========================
-@app.route("/")
-def home():
-    return f"Bot is alive! Session: {SESSION_ID}", 200
-
-@app.route("/health")
-def health_check():
-    """Health check endpoint with source status"""
-    try:
-        if health_monitor:
-            status = {}
-            for source in ["ANN", "ANN_DC", "DCW", "TMS", "FANDOM"]:
-                health = health_monitor.get_source_health(source)
-                if health:
-                    status[source] = {
-                        "success_rate": health["success_rate"],
-                        "consecutive_failures": health["consecutive_failures"],
-                        "status": "healthy" if health["consecutive_failures"] < 3 else "unhealthy"
-                    }
-                else:
-                    status[source] = {"status": "no_data"}
-            
-            return {
-                "bot_status": "alive",
-                "session_id": SESSION_ID,
-                "sources": status,
-                "timestamp": datetime.now().isoformat()
-            }, 200
-        else:
-            return {
-                "bot_status": "alive",
-                "session_id": SESSION_ID,
-                "monitoring": "disabled",
-                "timestamp": datetime.now().isoformat()
-            }, 200
-    except Exception as e:
-        return {"error": str(e)}, 500
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    try:
-        update = request.get_json()
-        if not update:
-            return "OK", 200
-
-        msg = update.get("message", {})
-        if msg.get("text") == "/start":
-            user_id = str(msg.get("from", {}).get("id", ""))
-            chat_id = msg.get("chat", {}).get("id")
-            if (not ADMIN_ID) or (user_id == str(ADMIN_ID)):
-                send_message(chat_id, get_simple_stats())
-        return "OK", 200
-    except Exception as e:
-        logging.error(f"Webhook error: {e}")
-        return "OK", 200
-
-def keep_alive():
-    if not RENDER_EXTERNAL_URL:
-        return
-    while True:
-        try:
-            time.sleep(300)
-            r = requests.get(RENDER_EXTERNAL_URL, timeout=5)
-            logging.info(f"Self-ping status: {r.status_code}")
-        except Exception as e:
-            logging.error(f"Self-ping failed: {e}")
 
 # =========================
 # TEXT HELPERS
@@ -1071,56 +1001,34 @@ def run_slot(date_obj, slot, scheduled_local):
         finish_run(run_id, "failed", posts_sent, source_counts, error_msg)
         logging.error(f"✗ SLOT {slot} FAILED: {e}")
 
-# =========================
-# MAIN LOOP
-# =========================
-def scheduler_loop():
-    logging.info("Scheduler loop started")
+def run_once():
+    """Main execution logic for a single GitHub Action run."""
+    dt = now_local()
+    date_obj = dt.date()
+    current_slot = slot_index(dt)
     
-    while True:
-        try:
-            dt = now_local()
-            date_obj = dt.date()
+    logging.info(f"GitHub Action Execution - Slot: {current_slot} - Date: {date_obj}")
+    
+    # Check if this slot was already successful to prevent double-runs
+    completed = completed_slots_today(date_obj)
+    if current_slot in completed:
+        logging.info(f"Slot {current_slot} already marked as success in Supabase. Exiting.")
+        return
 
-            current_slot = slot_index(dt)
-            completed = completed_slots_today(date_obj)
-
-            # Catch-up: run missing slots <= current slot
-            missing = [s for s in range(0, current_slot + 1) if s not in completed]
-            if missing:
-                s = missing[0]
-                scheduled_local = dt.replace(hour=s * 4, minute=0, second=0, microsecond=0)
-                logging.info(f"Catching up on missed slot {s}")
-                run_slot(date_obj, s, scheduled_local)
-                continue
-
-            # Wait for next slot
-            nxt = next_slot_start(dt)
-            sleep_s = max(1, int((nxt - dt).total_seconds()))
-            logging.info(f"Next slot at {nxt.strftime('%H:%M IST')}, sleeping {sleep_s}s")
-            time.sleep(min(sleep_s, 300))  # Wake up every 5 min to check
-            
-        except Exception as e:
-            logging.error(f"Scheduler loop error: {e}")
-            time.sleep(60)
+    # Execute the slot
+    scheduled_local = slot_start_for(dt)
+    run_slot(date_obj, current_slot, scheduled_local)
 
 if __name__ == "__main__":
     logging.info("=" * 60)
-    logging.info("Detective Conan News Bot Starting")
-    logging.info(f"Session ID: {SESSION_ID}")
-    logging.info(f"Timezone: {local_tz}")
-    logging.info(f"Supabase: {'Connected' if supabase else 'Disabled'}")
+    logging.info("Detective Conan News Bot - GitHub Action Mode")
     logging.info("=" * 60)
     
     initialize_bot_stats()
-
-    if RENDER_EXTERNAL_URL:
-        Thread(target=keep_alive, daemon=True).start()
-        logging.info("Keep-alive thread started")
-
-    Thread(target=scheduler_loop, daemon=True).start()
-    logging.info("Scheduler thread started")
-
-    port = int(os.environ.get("PORT", 10000))
-    logging.info(f"Starting Flask server on port {port}")
-    app.run(host="0.0.0.0", port=port)
+    
+    # No Flask, no keep-alive, no threads. Just run and exit.
+    try:
+        run_once()
+    except Exception as e:
+        logging.error(f"Critical execution failure: {e}")
+        exit(1) # Ensure GitHub Action shows a failure status
