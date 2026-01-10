@@ -15,6 +15,17 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from flask import Flask, request
 from dotenv import load_dotenv
+from collections import defaultdict
+
+try:
+    from source_monitor import health_monitor, monitor_source_call
+except ImportError:
+    # Fallback if monitoring is not available
+    health_monitor = None
+    def monitor_source_call(source_name):
+        def decorator(func):
+            return func
+        return decorator
 
 try:
     from supabase import create_client
@@ -45,6 +56,35 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 
 POSTED_TITLES_FILE = "posted_titles.json"
+
+# Circuit breaker for source failures
+class SourceCircuitBreaker:
+    def __init__(self, failure_threshold=3, recovery_timeout=300):
+        self.failure_counts = defaultdict(int)
+        self.last_failure_time = defaultdict(float)
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+    
+    def can_call(self, source):
+        if self.failure_counts[source] < self.failure_threshold:
+            return True
+        
+        # Check if recovery timeout has passed
+        if time.time() - self.last_failure_time[source] > self.recovery_timeout:
+            self.failure_counts[source] = 0
+            return True
+        
+        return False
+    
+    def record_success(self, source):
+        self.failure_counts[source] = 0
+    
+    def record_failure(self, source):
+        self.failure_counts[source] += 1
+        self.last_failure_time[source] = time.time()
+        logging.warning(f"Circuit breaker: {source} failure count: {self.failure_counts[source]}")
+
+circuit_breaker = SourceCircuitBreaker()
 
 BASE_URL = "https://www.animenewsnetwork.com"
 BASE_URL_DC = "https://www.detectiveconanworld.com"
@@ -81,18 +121,32 @@ if SUPABASE_URL and SUPABASE_KEY and create_client:
     except Exception as e:
         logging.error(f"Supabase init failed: {e}")
 
-# Session for web scraping (not for Telegram)
-session = requests.Session()
-session.headers.update(
-    {
+# Session factory for web scraping
+def get_scraping_session():
+    """Create fresh session for web scraping with proper retry strategy"""
+    session = requests.Session()
+    
+    # Configure retry strategy
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=2,
+        status_forcelist=[429, 500, 502, 503, 504, 104],
+        allowed_methods=["GET", "POST"]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=1, pool_maxsize=1)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
         "Accept-Encoding": "gzip, deflate",
-        "Connection": "keep-alive",
+        "Connection": "close",  # Prevent connection reuse issues
         "Upgrade-Insecure-Requests": "1",
-    }
-)
+    })
+    
+    return session
 
 app = Flask(__name__)
 
@@ -155,6 +209,39 @@ def get_fresh_telegram_session():
 @app.route("/")
 def home():
     return f"Bot is alive! Session: {SESSION_ID}", 200
+
+@app.route("/health")
+def health_check():
+    """Health check endpoint with source status"""
+    try:
+        if health_monitor:
+            status = {}
+            for source in ["ANN", "ANN_DC", "DCW", "TMS", "FANDOM"]:
+                health = health_monitor.get_source_health(source)
+                if health:
+                    status[source] = {
+                        "success_rate": health["success_rate"],
+                        "consecutive_failures": health["consecutive_failures"],
+                        "status": "healthy" if health["consecutive_failures"] < 3 else "unhealthy"
+                    }
+                else:
+                    status[source] = {"status": "no_data"}
+            
+            return {
+                "bot_status": "alive",
+                "session_id": SESSION_ID,
+                "sources": status,
+                "timestamp": datetime.now().isoformat()
+            }, 200
+        else:
+            return {
+                "bot_status": "alive",
+                "session_id": SESSION_ID,
+                "monitoring": "disabled",
+                "timestamp": datetime.now().isoformat()
+            }, 200
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -445,14 +532,18 @@ def record_post(title, source_code, run_id, slot, posted_titles_set):
 def validate_image_url(image_url):
     if not image_url:
         return False
+    session = get_scraping_session()
     try:
         headers = {"Range": "bytes=0-511"}
-        r = session.get(image_url, headers=headers, timeout=5, stream=True)
+        r = session.get(image_url, headers=headers, timeout=10, stream=True)
         r.raise_for_status()
         content_type = r.headers.get("content-type", "")
         return content_type.startswith("image/")
-    except Exception:
+    except Exception as e:
+        logging.debug(f"Image validation failed for {image_url}: {e}")
         return False
+    finally:
+        session.close()
 
 def extract_video_url(soup):
     try:
@@ -466,10 +557,12 @@ def extract_video_url(soup):
         pass
     return None
 
-@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=6))
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=3, max=10))
+@monitor_source_call("ANN")
 def fetch_anime_news():
+    session = get_scraping_session()
     try:
-        r = session.get(BASE_URL, timeout=15)
+        r = session.get(BASE_URL, timeout=20)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
 
@@ -499,11 +592,15 @@ def fetch_anime_news():
     except Exception as e:
         logging.error(f"fetch_anime_news failed: {e}")
         return []
+    finally:
+        session.close()
 
-@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=6))
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=3, max=10))
+@monitor_source_call("ANN_DC")
 def fetch_ann_dc_news():
+    session = get_scraping_session()
     try:
-        r = session.get(BASE_URL_ANN_DC, timeout=15)
+        r = session.get(BASE_URL_ANN_DC, timeout=20)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
 
@@ -533,22 +630,25 @@ def fetch_ann_dc_news():
     except Exception as e:
         logging.error(f"fetch_ann_dc_news failed: {e}")
         return []
+    finally:
+        session.close()
 
-@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=6))
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=3, max=10))
 def fetch_article_details(article_url, article):
+    session = get_scraping_session()
     image_url = None
     summary = "No summary available."
     video_url = None
     date_str = None
 
-    thumb = article.find("div", class_="thumbnail lazyload")
-    if thumb and thumb.get("data-src"):
-        img_url = thumb["data-src"]
-        image_url = f"{BASE_URL}{img_url}" if not img_url.startswith("http") else img_url
+    try:
+        thumb = article.find("div", class_="thumbnail lazyload")
+        if thumb and thumb.get("data-src"):
+            img_url = thumb["data-src"]
+            image_url = f"{BASE_URL}{img_url}" if not img_url.startswith("http") else img_url
 
-    if article_url:
-        try:
-            r = session.get(article_url, timeout=15)
+        if article_url:
+            r = session.get(article_url, timeout=20)
             r.raise_for_status()
             s = BeautifulSoup(r.text, "html.parser")
 
@@ -568,8 +668,10 @@ def fetch_article_details(article_url, article):
                     if len(txt) > 50:
                         summary = txt[:350] + "..." if len(txt) > 350 else txt
                         break
-        except Exception as e:
-            logging.warning(f"Failed to fetch article details: {e}")
+    except Exception as e:
+        logging.warning(f"Failed to fetch article details: {e}")
+    finally:
+        session.close()
 
     return {"image": image_url, "summary": summary, "video": video_url, "date": date_str}
 
@@ -592,11 +694,13 @@ def fetch_selected_articles(news_list):
                 x["video"] = None
                 x["date"] = None
 
-@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=6))
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=3, max=10))
+@monitor_source_call("DCW")
 def fetch_dc_updates():
+    session = get_scraping_session()
     try:
         url = f"{BASE_URL_DC}/wiki/Special:RecentChanges"
-        r = session.get(url, timeout=20)
+        r = session.get(url, timeout=25)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
 
@@ -641,11 +745,15 @@ def fetch_dc_updates():
     except Exception as e:
         logging.error(f"fetch_dc_updates failed: {e}")
         return []
+    finally:
+        session.close()
 
-@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=6))
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=3, max=10))
+@monitor_source_call("TMS")
 def fetch_tms_news():
+    session = get_scraping_session()
     try:
-        r = session.get(BASE_URL_TMS + "/detective-conan", timeout=15)
+        r = session.get(BASE_URL_TMS + "/detective-conan", timeout=20)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
 
@@ -668,12 +776,16 @@ def fetch_tms_news():
     except Exception as e:
         logging.error(f"fetch_tms_news failed: {e}")
         return []
+    finally:
+        session.close()
 
-@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=6))
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=3, max=10))
+@monitor_source_call("FANDOM")
 def fetch_fandom_updates():
+    session = get_scraping_session()
     try:
         url = f"{BASE_URL_FANDOM}/wiki/Special:RecentChanges"
-        r = session.get(url, timeout=15)
+        r = session.get(url, timeout=25)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
 
@@ -718,6 +830,8 @@ def fetch_fandom_updates():
     except Exception as e:
         logging.error(f"fetch_fandom_updates failed: {e}")
         return []
+    finally:
+        session.close()
 
 # =========================
 # TELEGRAM SEND (FIXED WITH RETRIES)
@@ -870,18 +984,73 @@ def run_slot(date_obj, slot, scheduled_local):
     source_counts = {"ANN": 0, "ANN_DC": 0, "DCW": 0, "TMS": 0, "FANDOM": 0}
 
     try:
-        # Fetch from all sources
+        # Fetch from all sources with individual error handling
         logging.info("Fetching news from all sources...")
-        ann = fetch_anime_news()
-        ann_dc = fetch_ann_dc_news()
-        fetch_selected_articles(ann + ann_dc)
-
-        dcw = fetch_dc_updates()
-        tms = fetch_tms_news()
-        fandom = fetch_fandom_updates()
+        
+        ann = []
+        if circuit_breaker.can_call("ANN"):
+            try:
+                ann = fetch_anime_news()
+                circuit_breaker.record_success("ANN")
+            except Exception as e:
+                circuit_breaker.record_failure("ANN")
+                logging.error(f"ANN fetch completely failed: {e}")
+        else:
+            logging.warning("ANN source circuit breaker open - skipping")
+        
+        ann_dc = []
+        if circuit_breaker.can_call("ANN_DC"):
+            try:
+                ann_dc = fetch_ann_dc_news()
+                circuit_breaker.record_success("ANN_DC")
+            except Exception as e:
+                circuit_breaker.record_failure("ANN_DC")
+                logging.error(f"ANN DC fetch completely failed: {e}")
+        else:
+            logging.warning("ANN_DC source circuit breaker open - skipping")
+        
+        # Fetch article details for ANN sources
+        try:
+            fetch_selected_articles(ann + ann_dc)
+        except Exception as e:
+            logging.error(f"Article details fetch failed: {e}")
+        
+        dcw = []
+        if circuit_breaker.can_call("DCW"):
+            try:
+                dcw = fetch_dc_updates()
+                circuit_breaker.record_success("DCW")
+            except Exception as e:
+                circuit_breaker.record_failure("DCW")
+                logging.error(f"DC Wiki fetch completely failed: {e}")
+        else:
+            logging.warning("DCW source circuit breaker open - skipping")
+        
+        tms = []
+        if circuit_breaker.can_call("TMS"):
+            try:
+                tms = fetch_tms_news()
+                circuit_breaker.record_success("TMS")
+            except Exception as e:
+                circuit_breaker.record_failure("TMS")
+                logging.error(f"TMS fetch completely failed: {e}")
+        else:
+            logging.warning("TMS source circuit breaker open - skipping")
+        
+        fandom = []
+        if circuit_breaker.can_call("FANDOM"):
+            try:
+                fandom = fetch_fandom_updates()
+                circuit_breaker.record_success("FANDOM")
+            except Exception as e:
+                circuit_breaker.record_failure("FANDOM")
+                logging.error(f"Fandom fetch completely failed: {e}")
+        else:
+            logging.warning("FANDOM source circuit breaker open - skipping")
 
         items = ann + dcw + tms + fandom + ann_dc
         logging.info(f"Total items fetched: {len(items)}")
+        logging.info(f"Source breakdown: ANN={len(ann)}, ANN_DC={len(ann_dc)}, DCW={len(dcw)}, TMS={len(tms)}, FANDOM={len(fandom)}")
 
         # Send each item
         for item in items:
