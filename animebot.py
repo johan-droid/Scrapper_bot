@@ -325,6 +325,12 @@ def fetch_details_concurrently(items):
             # Summary extraction
             div = s.find("div", class_="meat") or s.find("div", class_="content")
             if div:
+                # Remove unwanted hidden tags that leak into text
+                for hidden in div.find_all(style=re.compile(r"display:\s*none")): 
+                    hidden.decompose()
+                for bad_class in div.find_all(class_="fr-mk"):
+                    bad_class.decompose()
+                    
                 txt = div.get_text(" ", strip=True)
                 item["summary"] = txt[:350] + "..." if len(txt) > 350 else txt
         except: pass
@@ -350,6 +356,7 @@ def format_message(item):
         f"<b>{title}</b>\n\n"
         f"{summary}\n\n"
         f"<b>Source:</b> {source_name}\n"
+        f"<b>📢 Channel:</b> @Detective_Conan_News\n"
         f"🔗 <a href='{link}'>Read Full Article</a>"
     )
     return msg
