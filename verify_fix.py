@@ -22,26 +22,30 @@ def get_details_mock(item):
         r = session.get(item["article_url"], timeout=15)
         s = BeautifulSoup(r.text, "html.parser")
         
-        # 1. Try OpenGraph Image (Best for news)
-        og_img = s.find("meta", property="og:image")
-        if og_img and og_img.get("content"):
-            item["image"] = og_img["content"]
-            print(f"  [+] Found OG Image: {item['image']}")
-        else:
-            print(f"  [-] No OG Image found")
-
-        # 2. If no OG image, try first image in main content
-        if not item.get("image"):
-            content_div = s.find("div", class_="meat") or s.find("div", class_="content")
-            if content_div:
-                for img in content_div.find_all("img"):
-                    src = img.get("src") or img.get("data-src")
-                    # Filter out spacers, tracking pixels, and tiny icons
-                    if src and "spacer" not in src and "pixel" not in src and not src.endswith(".gif"):
-                        item["image"] = f"{BASE_URL}{src}" if not src.startswith("http") else src
-                        print(f"  [+] Found Content Image: {item['image']}")
-                        break
+        # 1. Try text content/meat div first (More specific to the article)
+        content_img = None
+        content_div = s.find("div", class_="meat") or s.find("div", class_="content")
+        if content_div:
+            for img in content_div.find_all("img"):
+                src = img.get("src") or img.get("data-src")
+                # Filter out spacers, tracking pixels, and tiny icons
+                if src and "spacer" not in src and "pixel" not in src and not src.endswith(".gif"):
+                     # Skip known generic/footer images if needed
+                    if "facebook" in src or "twitter" in src: continue
+                    
+                    full_src = f"{BASE_URL}{src}" if not src.startswith("http") else src
+                    content_img = full_src
+                    item["image"] = content_img
+                    print(f"  [+] Found Content Image: {item['image']}")
+                    break
         
+        # 2. If no content image, try OpenGraph (Backup)
+        if not item.get("image"):
+            og_img = s.find("meta", property="og:image")
+            if og_img and og_img.get("content"):
+                item["image"] = og_img["content"]
+                print(f"  [+] Found OG Image (Backup): {item['image']}")
+
         # 3. Fallback to thumbnail (but be careful of generic ones)
         if not item.get("image"):
             thumb = s.find("div", class_="thumbnail lazyload")
