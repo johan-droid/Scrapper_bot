@@ -5,3 +5,4 @@ pytz
 supabase
 Flask>=3.0.0
 python-dotenv
+pydantic

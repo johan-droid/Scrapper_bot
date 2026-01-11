@@ -30,6 +30,12 @@ except Exception as e:
     logging.warning(f"Supabase import failed: {e}")
     create_client = None
 
+try:
+    from models import NewsItem
+except ImportError:
+    # Fallback for when models.py isn't found (shouldn't happen in correct setup)
+    logging.warning("Could not import NewsItem from models") 
+
 # Load env vars (useful for local testing, ignored in GHA if secrets are mapped)
 env_path = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(env_path, override=True)
@@ -273,83 +279,90 @@ def parse_ann(html):
         except: continue
         if DEBUG_MODE or news_date == today:
             link = title_tag.find("a")
-            out.append({"source": "ANN", "title": title_tag.get_text(" ", strip=True), 
-                        "article_url": f"{BASE_URL}{link['href']}" if link else None, "article": article})
+            # Create NewsItem immediately - validating data
+            item = NewsItem(
+                source="ANN",
+                title=title_tag.get_text(" ", strip=True),
+                article_url=f"{BASE_URL}{link['href']}" if link else None
+            )
+            # Find initial summary if available (ANN usually has it in 'intro')
+            intro = article.find("div", class_="intro") # Example, adjust if needed
+            if intro:
+                 item.summary = intro.get_text(" ", strip=True)
+
+            out.append(item)
     return out
 
 def parse_ann_dc(html):
     # Reuse ANN logic but change source tag
     items = parse_ann(html)
     for i in items: 
-        i["source"] = "ANN_DC"
-        i["title"] = f"ANN DC News: {i['title']}"
+        i.source = "ANN_DC"
+        i.title = f"ANN DC News: {i.title}"
     return items
 
 def fetch_details_concurrently(items):
-    def get_details(item):
-        if not item.get("article_url"): return item
+    def get_details(item: NewsItem):
+        if not item.article_url: return item
         session = get_scraping_session()
         try:
-            r = session.get(item["article_url"], timeout=15)
+            r = session.get(item.article_url, timeout=15)
             s = BeautifulSoup(r.text, "html.parser")
             
-            # 1. Try text content/meat div first (More specific to the article)
+            # 1. Try text content/meat div first
             content_img = None
             content_div = s.find("div", class_="meat") or s.find("div", class_="content")
             if content_div:
                 for img in content_div.find_all("img"):
                     src = img.get("src") or img.get("data-src")
-                    # Filter out spacers, tracking pixels, and tiny icons
                     if src and "spacer" not in src and "pixel" not in src and not src.endswith(".gif"):
-                        # Skip known generic/footer images if needed
                         if "facebook" in src or "twitter" in src: continue
-                        
                         full_src = f"{BASE_URL}{src}" if not src.startswith("http") else src
-                        content_img = full_src
-                        item["image"] = content_img
+                        item.image = full_src
                         break
             
-            # 2. If no content image, try OpenGraph (Backup)
-            if not item.get("image"):
+            # 2. OpenGraph Backup
+            if not item.image:
                 og_img = s.find("meta", property="og:image")
                 if og_img and og_img.get("content"):
-                    item["image"] = og_img["content"]
+                    item.image = og_img["content"]
             
             # 3. Fallback to thumbnail
-            if not item.get("image"):
+            if not item.image:
                 thumb = s.find("div", class_="thumbnail lazyload")
                 if thumb and thumb.get("data-src"): 
                     src = thumb['data-src']
-                    item["image"] = f"{BASE_URL}{src}" if not src.startswith("http") else src
+                    item.image = f"{BASE_URL}{src}" if not src.startswith("http") else src
 
             # Summary extraction
             div = s.find("div", class_="meat") or s.find("div", class_="content")
             if div:
-                # Remove unwanted hidden tags that leak into text
+                # Cleaning
                 for hidden in div.find_all(style=re.compile(r"display:\s*none")): 
                     hidden.decompose()
                 for bad_class in div.find_all(class_="fr-mk"):
                     bad_class.decompose()
                     
                 txt = div.get_text(" ", strip=True)
-                item["summary"] = txt[:350] + "..." if len(txt) > 350 else txt
-        except: pass
+                item.summary = txt[:350] + "..." if len(txt) > 350 else txt
+        except Exception as e:
+            logging.error(f"Details fetch failed for {item.article_url}: {e}")
         finally: session.close()
         return item
 
     with ThreadPoolExecutor(max_workers=5) as ex:
         ex.map(get_details, items)
     # --- 8. TELEGRAM SENDER ---
-def format_message(item):
+def format_message(item: NewsItem):
     source_map = {
         "ANN": "Anime News Network", "ANN_DC": "ANN (Detective Conan)",
         "DCW": "Detective Conan Wiki", "TMS": "TMS Entertainment", "FANDOM": "Fandom Wiki"
     }
-    source_name = source_map.get(item.get("source"), item.get("source", "News"))
+    source_name = source_map.get(item.source, item.source)
     
-    title = escape_html(item["title"])
-    summary = escape_html(item.get("summary", ""))
-    link = item.get("article_url", "")
+    title = escape_html(item.title)
+    summary = escape_html(item.summary)
+    link = item.article_url or ""
     
     # Cleaner Template
     msg = (
@@ -361,11 +374,11 @@ def format_message(item):
     )
     return msg
 
-def send_to_telegram(item, run_id, slot, posted_set):
-    title = item["title"]
+def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
+    title = item.title
     if get_normalized_key(title) in posted_set: return False
 
-    if not record_post(title, item.get("source"), run_id, slot, posted_set):
+    if not record_post(title, item.source, run_id, slot, posted_set):
         return False
 
     msg = format_message(item)
@@ -373,9 +386,9 @@ def send_to_telegram(item, run_id, slot, posted_set):
     sess = get_fresh_telegram_session()
     sent = False
     try:
-        if item.get("image") and validate_image_url(item["image"]):
+        if item.image and validate_image_url(item.image):
             sess.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", 
-                      data={"chat_id": CHAT_ID, "photo": item["image"], "caption": msg, "parse_mode": "HTML"}, timeout=20)
+                      data={"chat_id": CHAT_ID, "photo": item.image, "caption": msg, "parse_mode": "HTML"}, timeout=20)
             sent = True
         else:
             sess.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
@@ -429,9 +442,12 @@ def run_once():
     source_counts = defaultdict(int)
     
     for item in all_items:
+        # Check if item is valid (Pydantic models are always valid if created, but check empty fields)
+        if not item.title: continue
+        
         if send_to_telegram(item, run_id, slot, posted_set):
             sent_count += 1
-            source_counts[item.get("source")] += 1
+            source_counts[item.source] += 1
             time.sleep(1.0) # Rate limit protection
 
     # 5. Finish
