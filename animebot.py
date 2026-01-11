@@ -36,6 +36,11 @@ except ImportError:
     # Fallback for when models.py isn't found (shouldn't happen in correct setup)
     logging.warning("Could not import NewsItem from models") 
 
+try:
+    from utils import clean_text_extractor
+except ImportError:
+    def clean_text_extractor(element): return element.get_text(" ", strip=True) if element else ""
+
 # Load env vars (useful for local testing, ignored in GHA if secrets are mapped)
 env_path = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(env_path, override=True)
@@ -286,9 +291,9 @@ def parse_ann(html):
                 article_url=f"{BASE_URL}{link['href']}" if link else None
             )
             # Find initial summary if available (ANN usually has it in 'intro')
-            intro = article.find("div", class_="intro") # Example, adjust if needed
+            intro = article.find("div", class_="intro") 
             if intro:
-                 item.summary = intro.get_text(" ", strip=True)
+                 item.summary = clean_text_extractor(intro) # Apply cleaning here too!
 
             out.append(item)
     return out
@@ -337,13 +342,8 @@ def fetch_details_concurrently(items):
             # Summary extraction
             div = s.find("div", class_="meat") or s.find("div", class_="content")
             if div:
-                # Cleaning
-                for hidden in div.find_all(style=re.compile(r"display:\s*none")): 
-                    hidden.decompose()
-                for bad_class in div.find_all(class_="fr-mk"):
-                    bad_class.decompose()
-                    
-                txt = div.get_text(" ", strip=True)
+                # Use centralized utility for consistent cleaning
+                txt = clean_text_extractor(div)
                 item.summary = txt[:350] + "..." if len(txt) > 350 else txt
         except Exception as e:
             logging.error(f"Details fetch failed for {item.article_url}: {e}")

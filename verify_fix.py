@@ -1,6 +1,19 @@
 import requests
 from bs4 import BeautifulSoup
 import logging
+import sys
+import os
+
+# Mock Env Vars to pass animebot startup checks
+os.environ["BOT_TOKEN"] = "FALSE_TOKEN"
+os.environ["CHAT_ID"] = "12345"
+
+# Utility import attempt
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+try:
+    from utils import clean_text_extractor
+except ImportError:
+    def clean_text_extractor(e): return e.get_text(" ", strip=True) if e else ""
 
 logging.basicConfig(level=logging.INFO)
 
