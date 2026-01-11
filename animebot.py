@@ -290,13 +290,32 @@ def fetch_details_concurrently(items):
         if not item.get("article_url"): return item
         session = get_scraping_session()
         try:
-            # Simple detail fetch logic
             r = session.get(item["article_url"], timeout=15)
             s = BeautifulSoup(r.text, "html.parser")
-            # Image extraction
-            thumb = s.find("div", class_="thumbnail lazyload")
-            if thumb and thumb.get("data-src"): 
-                item["image"] = f"{BASE_URL}{thumb['data-src']}" if not thumb['data-src'].startswith("http") else thumb['data-src']
+            
+            # 1. Try OpenGraph Image (Best for news)
+            og_img = s.find("meta", property="og:image")
+            if og_img and og_img.get("content"):
+                item["image"] = og_img["content"]
+            
+            # 2. If no OG image, try first image in main content
+            if not item.get("image"):
+                content_div = s.find("div", class_="meat") or s.find("div", class_="content")
+                if content_div:
+                    for img in content_div.find_all("img"):
+                        src = img.get("src") or img.get("data-src")
+                        # Filter out spacers, tracking pixels, and tiny icons
+                        if src and "spacer" not in src and "pixel" not in src and not src.endswith(".gif"):
+                            item["image"] = f"{BASE_URL}{src}" if not src.startswith("http") else src
+                            break
+            
+            # 3. Fallback to thumbnail (but be careful of generic ones)
+            if not item.get("image"):
+                thumb = s.find("div", class_="thumbnail lazyload")
+                if thumb and thumb.get("data-src"): 
+                    src = thumb['data-src']
+                    item["image"] = f"{BASE_URL}{src}" if not src.startswith("http") else src
+
             # Summary extraction
             div = s.find("div", class_="meat") or s.find("div", class_="content")
             if div:
@@ -309,6 +328,28 @@ def fetch_details_concurrently(items):
     with ThreadPoolExecutor(max_workers=5) as ex:
         ex.map(get_details, items)
     # --- 8. TELEGRAM SENDER ---
+def format_message(item):
+    source_map = {
+        "ANN": "Anime News Network", "ANN_DC": "ANN (Detective Conan)",
+        "DCW": "Detective Conan Wiki", "TMS": "TMS Entertainment", "FANDOM": "Fandom Wiki"
+    }
+    source_name = source_map.get(item.get("source"), item.get("source", "News"))
+    
+    title = escape_html(item["title"])
+    summary = escape_html(item.get("summary", ""))
+    link = item.get("article_url", "")
+    
+    # Professional Template
+    msg = (
+        f"<b>📰 NEWS FLASH | {source_name}</b>\n\n"
+        f"<b>{title}</b>\n\n"
+        f"{summary}\n\n"
+        f"<i>🤖 System: Detective Conan Bot</i>\n"
+        f"<b>📢 Channel:</b> @Detective_Conan_News\n\n"
+        f"🔗 <a href='{link}'>Read Full Article</a>"
+    )
+    return msg
+
 def send_to_telegram(item, run_id, slot, posted_set):
     title = item["title"]
     if get_normalized_key(title) in posted_set: return False
@@ -316,7 +357,7 @@ def send_to_telegram(item, run_id, slot, posted_set):
     if not record_post(title, item.get("source"), run_id, slot, posted_set):
         return False
 
-    msg = f"<b>ANIME NEWS UPDATE</b>\n\n▶️ <b>{escape_html(title)}</b>\n\n{escape_html(item.get('summary', ''))}\n\n🔗 <a href='{item.get('article_url', '')}'>Read more</a>"
+    msg = format_message(item)
     
     sess = get_fresh_telegram_session()
     sent = False
