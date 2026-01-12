@@ -670,6 +670,8 @@ def run_once():
         all_items.extend(ann_items)
     
     # ANN DC
+    if circuit_breaker.can_call("ANN_DC"):
+        ann_dc_items = fetch_generic(BASE_URL_ANN_DC, "ANN_DC", parse_ann_dc)
         all_items.extend(ann_dc_items)
 
     # Anime News India
