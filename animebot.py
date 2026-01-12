@@ -572,6 +572,77 @@ def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
         sess.close()
     return sent
 
+def send_admin_report(run_id, status, posts_sent, source_counts, error=None):
+    """
+    Sends a comprehensive report to the ADMIN_ID after each cycle.
+    Includes: Present stats, Past record, Health warnings, Source breakdown.
+    """
+    if not ADMIN_ID: return # Skip if no admin configured
+
+    # 1. Gather Data
+    dt = now_local()
+    date_str = str(dt.date())
+    slot = slot_index(dt)
+    
+    # Fetch Daily Total
+    daily_total = 0
+    if supabase:
+        try:
+            d = supabase.table("daily_stats").select("posts_count").eq("date", date_str).limit(1).execute()
+            if d.data: daily_total = d.data[0].get("posts_count", 0)
+        except: pass
+
+    # Fetch All-Time Total
+    all_time_total = 0
+    if supabase:
+        try:
+            b = supabase.table("bot_stats").select("total_posts_all_time").limit(1).execute()
+            if b.data: all_time_total = b.data[0].get("total_posts_all_time", 0)
+        except: pass
+        
+    # Check Health / Circuit Breaker
+    health_warnings = []
+    if error:
+        health_warnings.append(f"⚠️ <b>Critical Error:</b> {str(error)[:100]}")
+    
+    for source, count in circuit_breaker.failure_counts.items():
+        if count >= circuit_breaker.failure_threshold:
+             health_warnings.append(f"⚠️ <b>Source Skipped:</b> {source} (Failures: {count})")
+    
+    health_status = "✅ <b>System Healthy</b>" if not health_warnings else "\n".join(health_warnings)
+
+    # Format Source Counts
+    source_stats = "\n".join([f"• <b>{k}:</b> {v}" for k, v in source_counts.items()])
+    if not source_stats: source_stats = "• No new posts found."
+
+    # 2. Build Message
+    report_msg = (
+        f"🤖 <b>Scraper Bot Cycle Report</b>\n"
+        f"📅 Date: {date_str} | 🕒 Slot: {slot}\n\n"
+        
+        f"<b>📊 Present Cycle</b>\n"
+        f"• Status: {status.upper()}\n"
+        f"• Posts Sent: {posts_sent}\n"
+        f"• Breakdown:\n{source_stats}\n\n"
+        
+        f"<b>📈 Statistics</b>\n"
+        f"• Today's Total: {daily_total}\n"
+        f"• All-Time Record: {all_time_total}\n\n"
+        
+        f"<b>🏥 Health Status</b>\n"
+        f"{health_status}"
+    )
+
+    # 3. Send
+    sess = get_fresh_telegram_session()
+    try:
+        sess.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
+                  json={"chat_id": ADMIN_ID, "text": report_msg, "parse_mode": "HTML"}, timeout=20)
+    except Exception as e:
+        logging.error(f"Failed to send admin report: {e}")
+    finally:
+        sess.close()
+
 # --- 9. MAIN EXECUTION (ACTION MODE) ---
 def run_once():
     """Single execution entry point for GitHub Actions"""
@@ -644,10 +715,17 @@ def run_once():
     # 5. Finish
     finish_run(run_id, "success", sent_count, source_counts)
     logging.info(f"RUN COMPLETE. Sent: {sent_count}")
+    
+    # 6. Report
+    send_admin_report(run_id, "success", sent_count, source_counts)
 
 if __name__ == "__main__":
     try:
         run_once()
     except Exception as e:
         logging.error(f"FATAL ERROR: {e}")
+        # Send crash report
+        try:
+            send_admin_report("CRASH", "failed", 0, {}, error=str(e))
+        except: pass
         exit(1)
