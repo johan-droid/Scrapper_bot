@@ -349,6 +349,7 @@ def parse_reddit_rss(soup):
     if not entries: return []
 
     today = now_local().date()
+    yesterday = today - timedelta(days=1)
     
     for entry in entries:
         try:
@@ -360,7 +361,9 @@ def parse_reddit_rss(soup):
                 # Handle possible fractional seconds or timezone variations basic check
                 pub_date_dt = datetime.fromisoformat(pub_date_str.replace("Z", "+00:00"))
                 pub_date = pub_date_dt.astimezone(local_tz).date()
-                if not DEBUG_MODE and pub_date != today:
+                
+                # Allow Today OR Yesterday to catch late-night news
+                if not DEBUG_MODE and pub_date not in [today, yesterday]:
                     continue
             
             # 2. Extract Basic Info
@@ -418,6 +421,7 @@ def parse_ani_rss(soup):
     if not entries: return []
 
     today = now_local().date()
+    yesterday = today - timedelta(days=1)
 
     for entry in entries:
         try:
@@ -430,7 +434,7 @@ def parse_ani_rss(soup):
                 try:
                     dt = datetime.strptime(pub_date_tag.text.strip(), "%a, %d %b %Y %H:%M:%S %z")
                     pub_date = dt.astimezone(local_tz).date()
-                    if not DEBUG_MODE and pub_date != today:
+                    if not DEBUG_MODE and pub_date not in [today, yesterday]:
                         continue
                 except:
                     pass # If date parsing fails, maybe process it anyway or skip? Safer to skip or log.
