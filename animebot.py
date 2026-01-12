@@ -85,7 +85,15 @@ DEBUG_MODE = False
 SOURCE_LABEL = {
     "ANN": "Anime News Network", "ANN_DC": "ANN (Detective Conan)",
     "DCW": "Detective Conan Wiki", "TMS": "TMS Entertainment", "FANDOM": "Fandom Wiki",
+    "ANI": "Anime News India", "R_ANIME": "Reddit (r/anime)",
+    "R_OTP": "Reddit (r/OneTruthPrevails)", "R_DC": "Reddit (r/DetectiveConan)",
 }
+
+# RSS Feeds
+RSS_ANI = "https://animenewsindia.com/feed/"
+RSS_R_ANIME = "https://www.reddit.com/r/anime/new/.rss"
+RSS_R_OTP = "https://www.reddit.com/r/OneTruthPrevails/new/.rss"
+RSS_R_DC = "https://www.reddit.com/r/DetectiveConan/new/.rss"
 
 if not BOT_TOKEN or not CHAT_ID:
     logging.error("CRITICAL: BOT_TOKEN or CHAT_ID is missing.")
@@ -306,6 +314,166 @@ def parse_ann_dc(html):
         i.title = f"ANN DC News: {i.title}"
     return items
 
+def fetch_rss(url, source_name, parser_func):
+    """
+    Generic RSS fetcher. Supports both Atom (Reddit) and RSS 2.0 (WordPress).
+    """
+    session = get_scraping_session()
+    try:
+        # Reddit requires a unique User-Agent to avoid 429s even on RSS
+        if "reddit.com" in url:
+            session.headers.update({"User-Agent": "Mozilla/5.0 (compatible; ScrapperBot/2.0; +http://github.com/johan-droid)"})
+            
+        r = session.get(url, timeout=25)
+        r.raise_for_status()
+        
+        # 'xml' parser logic requires lxml or similar, but provides best results for RSS
+        # Fallback to html.parser if xml fails or isn't perfect, but RSS is XML.
+        try:
+            soup = BeautifulSoup(r.content, "xml")
+        except Exception:
+            soup = BeautifulSoup(r.content, "html.parser") # Fallback
+            
+        return parser_func(soup)
+    except Exception as e:
+        logging.error(f"{source_name} RSS fetch failed: {e}")
+        return []
+    finally:
+        session.close()
+
+def parse_reddit_rss(soup):
+    """Parses Reddit Atom feeds."""
+    items = []
+    # Atom uses <entry>
+    entries = soup.find_all("entry")
+    if not entries: return []
+
+    today = now_local().date()
+    
+    for entry in entries:
+        try:
+            # 1. Date Check
+            published = entry.find("published") or entry.find("updated")
+            if published:
+                # Format: 2025-01-12T15:00:00+00:00
+                pub_date_str = published.text
+                # Handle possible fractional seconds or timezone variations basic check
+                pub_date_dt = datetime.fromisoformat(pub_date_str.replace("Z", "+00:00"))
+                pub_date = pub_date_dt.astimezone(local_tz).date()
+                if not DEBUG_MODE and pub_date != today:
+                    continue
+            
+            # 2. Extract Basic Info
+            title = entry.find("title").text
+            link_tag = entry.find("link")
+            link = link_tag["href"] if link_tag else None
+            
+            # 3. Content Analysis (for Image)
+            content_html = ""
+            content_tag = entry.find("content")
+            if content_tag:
+                content_html = content_tag.text
+            
+            # Reddit specific: Parse the content HTML to find the thumbnail preview
+            image_url = None
+            if content_html:
+                c_soup = BeautifulSoup(content_html, "html.parser")
+                # Reddit typically puts a preview img in the content or we can use the thumbnail from media:thumbnail if present (Atom might not have media:thumbnail easily exposed without namespace parsing, but content_html usually has it)
+                img = c_soup.find("img")
+                if img:
+                    image_url = img.get("src")
+            
+            # Determine Source Label based on the feed content or context passed?
+            # The parser is generic, but the caller assigns source.
+            # We'll return generic objects and let caller/wrapper assign precise source code if needed.
+            # actually, passed source in NewsItem is best.
+            
+            # Wait, this function doesn't know which subreddit it is unless we pass it or infer it.
+            # Infer from author or link?
+            source_code = "REDDIT" # Placeholder
+            if "r/anime" in link: source_code = "R_ANIME"
+            elif "r/OneTruthPrevails" in link: source_code = "R_OTP"
+            elif "r/DetectiveConan" in link: source_code = "R_DC"
+
+            item = NewsItem(
+                title=title,
+                source=source_code,
+                article_url=link,
+                image=image_url
+            )
+            item.summary = "Reddit Discussion" # Default
+            items.append(item)
+            
+        except Exception as e:
+            logging.error(f"Error parsing reddit item: {e}")
+            continue
+            
+    return items
+
+def parse_ani_rss(soup):
+    """Parses Anime News India RSS 2.0 feed."""
+    items = []
+    # RSS 2.0 uses <item>
+    entries = soup.find_all("item")
+    if not entries: return []
+
+    today = now_local().date()
+
+    for entry in entries:
+        try:
+            # 1. Date Check
+            pub_date_tag = entry.find("pubDate")
+            if pub_date_tag:
+                # Format: Sun, 12 Jan 2025 10:00:00 +0000
+                # Using dateutil or manually parsing would be robust. 
+                # Be simplest: try standard format
+                try:
+                    dt = datetime.strptime(pub_date_tag.text.strip(), "%a, %d %b %Y %H:%M:%S %z")
+                    pub_date = dt.astimezone(local_tz).date()
+                    if not DEBUG_MODE and pub_date != today:
+                        continue
+                except:
+                    pass # If date parsing fails, maybe process it anyway or skip? Safer to skip or log.
+
+            title = entry.find("title").text
+            link = entry.find("link").text
+            
+            # 2. Image Extraction
+            image_url = None
+            # Check content:encoded first (full content)
+            content_encoded = entry.find("content:encoded")
+            description = entry.find("description")
+            
+            html_to_check = ""
+            if content_encoded: html_to_check = content_encoded.text
+            elif description: html_to_check = description.text
+            
+            if html_to_check:
+                c_soup = BeautifulSoup(html_to_check, "html.parser")
+                img = c_soup.find("img")
+                if img: image_url = img.get("src")
+            
+            # 3. Summary
+            summary_text = ""
+            if description:
+                summary_text = clean_text_extractor(BeautifulSoup(description.text, "html.parser"))
+                if len(summary_text) > 300: summary_text = summary_text[:300] + "..."
+            
+            item = NewsItem(
+                title=title,
+                source="ANI",
+                article_url=link,
+                image=image_url,
+                summary=summary_text if summary_text else "Read more on Anime News India."
+            )
+            items.append(item)
+
+        except Exception as e:
+            logging.error(f"Error parsing ANI item: {e}")
+            continue
+
+    return items
+
 def fetch_details_concurrently(items):
     def get_details(item: NewsItem):
         if not item.article_url: return item
@@ -427,9 +595,28 @@ def run_once():
         all_items.extend(ann_items)
     
     # ANN DC
-    if circuit_breaker.can_call("ANN_DC"):
-        ann_dc_items = fetch_generic(BASE_URL_ANN_DC, "ANN_DC", parse_ann_dc)
         all_items.extend(ann_dc_items)
+
+    # Anime News India
+    if circuit_breaker.can_call("ANI"):
+        ani_items = fetch_rss(RSS_ANI, "ANI", parse_ani_rss)
+        all_items.extend(ani_items)
+
+    # Reddit Scrapers (RSS)
+    # r/anime
+    if circuit_breaker.can_call("R_ANIME"):
+        r_anime = fetch_rss(RSS_R_ANIME, "R_ANIME", parse_reddit_rss)
+        all_items.extend(r_anime)
+        
+    # r/OneTruthPrevails
+    if circuit_breaker.can_call("R_OTP"):
+        r_otp = fetch_rss(RSS_R_OTP, "R_OTP", parse_reddit_rss)
+        all_items.extend(r_otp)
+        
+    # r/DetectiveConan
+    if circuit_breaker.can_call("R_DC"):
+        r_dc = fetch_rss(RSS_R_DC, "R_DC", parse_reddit_rss)
+        all_items.extend(r_dc)
 
     # (Add other sources DCW, TMS, FANDOM following similar pattern...)
 

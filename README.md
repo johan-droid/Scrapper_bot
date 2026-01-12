@@ -35,13 +35,44 @@ If you want persistent storage to prevent reposts across deployments:
 2. Create a new project
 3. Go to SQL Editor and run:
 ```sql
-CREATE TABLE posted_news (
+-- 1. Main News Storage
+CREATE TABLE IF NOT EXISTS posted_news (
     id SERIAL PRIMARY KEY,
     normalized_title TEXT NOT NULL,
     full_title TEXT,
+    source TEXT,
     posted_date DATE NOT NULL,
     posted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    run_id TEXT,
+    slot INTEGER,
     UNIQUE(normalized_title, posted_date)
+);
+
+-- 2. Run Tracking (for GitHub Actions slot logic)
+CREATE TABLE IF NOT EXISTS runs (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    date TEXT NOT NULL,
+    slot INTEGER NOT NULL,
+    scheduled_at TIMESTAMP WITH TIME ZONE,
+    started_at TIMESTAMP WITH TIME ZONE,
+    finished_at TIMESTAMP WITH TIME ZONE,
+    status TEXT,
+    posts_sent INTEGER DEFAULT 0,
+    source_counts JSONB,
+    error TEXT,
+    UNIQUE(date, slot) -- Critical for preventing duplicate runs
+);
+
+-- 3. Analytics
+CREATE TABLE IF NOT EXISTS bot_stats (
+    id SERIAL PRIMARY KEY,
+    bot_started_at TIMESTAMP WITH TIME ZONE,
+    total_posts_all_time INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS daily_stats (
+    date DATE PRIMARY KEY,
+    posts_count INTEGER DEFAULT 0
 );
 ```
 4. Get your project URL and anon key from Settings > API

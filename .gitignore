@@ -164,4 +164,10 @@ test_scrape.py
 # Temporary files
 *.tmp
 *.bak
-*.swp
+
+# Test/Debug Output
+test_new_sources.py
+output.txt
+verification.txt
+inspection.txt
+format_out.txt
