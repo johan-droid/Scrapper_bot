@@ -526,28 +526,80 @@ def fetch_details_concurrently(items):
         ex.map(get_details, items)
     # --- 8. TELEGRAM SENDER ---
 def format_message(item: NewsItem):
-    source_map = {
-        "ANN": "Anime News Network", "ANN_DC": "ANN (Detective Conan)",
-        "DCW": "Detective Conan Wiki", "TMS": "TMS Entertainment", "FANDOM": "Fandom Wiki"
+    # Custom formats for each source with proper JSON processing
+    source_configs = {
+        "ANN": {
+            "emoji": "📺",
+            "tag": "ANIME NEWS",
+            "color": "🔴",
+            "source_name": "Anime News Network"
+        },
+        "ANN_DC": {
+            "emoji": "🕵️", 
+            "tag": "CONAN NEWS",
+            "color": "🔵",
+            "source_name": "ANN (Detective Conan)"
+        },
+        "DCW": {
+            "emoji": "📚",
+            "tag": "WIKI UPDATE", 
+            "color": "🟢",
+            "source_name": "Detective Conan Wiki"
+        },
+        "TMS": {
+            "emoji": "🎬",
+            "tag": "TMS UPDATE",
+            "color": "🟡", 
+            "source_name": "TMS Entertainment"
+        },
+        "FANDOM": {
+            "emoji": "🌐",
+            "tag": "FANDOM NEWS",
+            "color": "🟣",
+            "source_name": "Fandom Wiki"
+        }
     }
-    source_name = source_map.get(item.source, item.source)
     
-    title = escape_html(item.title)
-    summary = escape_html(item.summary)
-    link = item.article_url or ""
+    config = source_configs.get(item.source, {
+        "emoji": "📰",
+        "tag": "NEWS UPDATE", 
+        "color": "⚪",
+        "source_name": item.source
+    })
     
-    # Cleaner Template
-    msg = (
-        f"<b>{title}</b>\n\n"
-        f"{summary}\n\n"
-        f"<b>Source:</b> {source_name}\n"
-        f"<b>📢 Channel:</b> @Detective_Conan_News\n"
-        f"🔗 <a href='{link}'>Read Full Article</a>"
-    )
-    return msg
+    # Safe text processing with proper escaping
+    title = escape_html(str(item.title)) if item.title else "No Title"
+    summary = escape_html(str(item.summary)) if item.summary else "No summary available"
+    link = str(item.article_url) if item.article_url else ""
+    
+    # Build message components safely
+    components = [
+        f"{config['emoji']} <b>{config['tag']}</b> {config['color']}",
+        f"<b>{title}</b>",
+        f"<i>{summary}</i>",
+        f"📊 <b>Source:</b> {config['source_name']}",
+        f"📢 <b>Channel:</b> @Detective_Conan_News"
+    ]
+    
+    # Add link only if valid
+    if link and link.startswith('http'):
+        components.append(f"🔗 <a href='{link}'>Read Full Article</a>")
+    
+    # Join with proper spacing and JSON-safe formatting
+    msg = "\n\n".join(components)
+    
+    # Final validation to prevent broken JSON
+    try:
+        # Test if message can be properly encoded
+        msg.encode('utf-8')
+        return msg
+    except Exception as e:
+        logging.error(f"Message encoding failed: {e}")
+        # Fallback to simple message
+        return f"<b>{title}</b>\n\n{summary}\n\n📊 Source: {config['source_name']}"
 
 def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
-    title = item.title
+    title = str(item.title) if item.title else "No Title"
     if get_normalized_key(title) in posted_set: return False
 
     if not record_post(title, item.source, run_id, slot, posted_set):
@@ -555,21 +607,66 @@ def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
 
     msg = format_message(item)
     
+    # Validate message before sending
+    if not msg or len(msg.strip()) == 0:
+        logging.error("Empty message generated, skipping send")
+        return False
+    
     sess = get_fresh_telegram_session()
     sent = False
+    
     try:
+        # Prepare payload with proper JSON structure
+        base_payload = {
+            "chat_id": CHAT_ID,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": False
+        }
+        
         if item.image and validate_image_url(item.image):
-            sess.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", 
-                      data={"chat_id": CHAT_ID, "photo": item.image, "caption": msg, "parse_mode": "HTML"}, timeout=20)
-            sent = True
+            # Send as photo with caption
+            photo_payload = base_payload.copy()
+            photo_payload.update({
+                "photo": item.image,
+                "caption": msg
+            })
+            response = sess.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                data=photo_payload,
+                timeout=20
+            )
         else:
-            sess.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
-                      json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=20)
-            sent = True
+            # Send as text message
+            text_payload = base_payload.copy()
+            text_payload.update({
+                "text": msg
+            })
+            response = sess.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json=text_payload,
+                timeout=20
+            )
+        
+        # Check response for proper JSON handling
+        if response.status_code == 200:
+            try:
+                response_json = response.json()
+                if response_json.get('ok'):
+                    sent = True
+                    logging.info(f"Message sent successfully: {title[:50]}...")
+                else:
+                    error_desc = response_json.get('description', 'Unknown error')
+                    logging.error(f"Telegram API error: {error_desc}")
+            except ValueError as e:
+                logging.error(f"Invalid JSON response from Telegram: {e}")
+        else:
+            logging.error(f"Telegram HTTP error: {response.status_code} - {response.text}")
+            
     except Exception as e:
-        logging.error(f"Telegram send failed: {e}")
+        logging.error(f"Telegram send failed: {type(e).__name__}: {str(e)[:200]}")
     finally:
         sess.close()
+    
     return sent
 
 def send_admin_report(run_id, status, posts_sent, source_counts, error=None):
