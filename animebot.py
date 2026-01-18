@@ -248,7 +248,9 @@ def finish_run(run_id, status, posts_sent, source_counts, error=None):
 def load_posted_titles(date_obj):
     if not supabase: return set()
     try:
-        r = supabase.table("posted_news").select("normalized_title").eq("posted_date", str(date_obj)).execute()
+        # Check last 7 days to prevent duplicate spam from previous days (more robust sync with DB)
+        start_date = date_obj - timedelta(days=7)
+        r = supabase.table("posted_news").select("normalized_title").gte("posted_date", str(start_date)).execute()
         return set(x["normalized_title"] for x in r.data)
     except Exception as e:
         logging.error(f"Failed to load posted titles: {e}")
@@ -449,7 +451,8 @@ def parse_ani_rss(soup):
                     if not DEBUG_MODE and pub_date not in [today, yesterday]:
                         continue
                 except:
-                    pass # If date parsing fails, maybe process it anyway or skip? Safer to skip or log.
+                    logging.warning(f"Date check failed for ANI item.")
+                    continue # Skip if date is unparseable to avoid old news spam
 
             title = entry.find("title").text
             link = entry.find("link").text
@@ -517,7 +520,8 @@ def parse_general_rss(soup, source_code):
                     pub_date = dt.astimezone(local_tz).date()
                     if not DEBUG_MODE and pub_date not in [today, yesterday]:
                         continue
-                 except: pass # Proceed if date parsing fails, strictly speaking we should filter but some feeds format oddly
+                 except: 
+                     continue # Skip if date is unparseable
 
             title = entry.find("title").text
             link = entry.find("link").text if entry.find("link") else None
@@ -603,13 +607,26 @@ def fetch_jikan_mal():
                 news_data = nr.json().get("data", [])
                 
                 for n in news_data:
-                    # Filter by date? Jikan news dates are ISO8601
-                    # "date": "2024-01-18T..."
-                    # Check recentness if possible, but Jikan returns sorted by date usually.
-                    
+                    # Filter by date strict check
+                    date_str = n.get("date")
+                    if date_str:
+                        try:
+                            # Jikan ISO format: 2024-01-18T14:00:00+00:00
+                            # Handling 'Z' just in case, though usually +00:00
+                            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                            n_date = dt.astimezone(local_tz).date()
+                            today = now_local().date()
+                            yesterday = today - timedelta(days=1)
+                            
+                            if not DEBUG_MODE and n_date not in [today, yesterday]:
+                                continue
+                        except Exception:
+                            # If date parsing fails, skip to be safe against old news
+                            continue
+
                     title = n.get("title")
                     url = n.get("url")
-                    image = n.get("images", {}).get("jpg", {}).get("image_url")
+                    image = n.get("images", {}).get("jpg", {}).get("large_image_url") or n.get("images", {}).get("jpg", {}).get("image_url")
                     excerpt = n.get("excerpt", "News about " + anime_title)
                     
                     # Store
@@ -641,23 +658,22 @@ def fetch_details_concurrently(items):
             r = session.get(item.article_url, timeout=15)
             s = BeautifulSoup(r.text, "html.parser")
             
-            # 1. Try text content/meat div first
-            content_img = None
-            content_div = s.find("div", class_="meat") or s.find("div", class_="content")
-            if content_div:
-                for img in content_div.find_all("img"):
-                    src = img.get("src") or img.get("data-src")
-                    if src and "spacer" not in src and "pixel" not in src and not src.endswith(".gif"):
-                        if "facebook" in src or "twitter" in src: continue
-                        full_src = f"{BASE_URL}{src}" if not src.startswith("http") else src
-                        item.image = full_src
-                        break
-            
-            # 2. OpenGraph Backup
+            # 1. OpenGraph First (Usually best quality)
+            og_img = s.find("meta", property="og:image")
+            if og_img and og_img.get("content"):
+                item.image = og_img["content"]
+
+            # 2. Try text content/meat div (Fallback)
             if not item.image:
-                og_img = s.find("meta", property="og:image")
-                if og_img and og_img.get("content"):
-                    item.image = og_img["content"]
+                content_div = s.find("div", class_="meat") or s.find("div", class_="content")
+                if content_div:
+                    for img in content_div.find_all("img"):
+                        src = img.get("src") or img.get("data-src")
+                        if src and "spacer" not in src and "pixel" not in src and not src.endswith(".gif"):
+                            if "facebook" in src or "twitter" in src: continue
+                            full_src = f"{BASE_URL}{src}" if not src.startswith("http") else src
+                            item.image = full_src
+                            break
             
             # 3. Fallback to thumbnail
             if not item.image:
