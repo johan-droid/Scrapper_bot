@@ -7,6 +7,7 @@ class NewsItem(BaseModel):
     article_url: Optional[str] = None 
     image: Optional[str] = None
     summary: str = "No summary available."
+    category: Optional[str] = None
     
     @field_validator('title')
     @classmethod

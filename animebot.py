@@ -87,6 +87,8 @@ SOURCE_LABEL = {
     "DCW": "Detective Conan Wiki", "TMS": "TMS Entertainment", "FANDOM": "Fandom Wiki",
     "ANI": "Anime News India", "R_ANIME": "Reddit (r/anime)",
     "R_OTP": "Reddit (r/OneTruthPrevails)", "R_DC": "Reddit (r/DetectiveConan)",
+    "MAL": "MyAnimeList (Jikan)", "CR": "Crunchyroll News",
+    "AC": "Anime Corner", "HONEY": "Honey's Anime",
 }
 
 # RSS Feeds
@@ -94,6 +96,10 @@ RSS_ANI = "https://animenewsindia.com/feed/"
 RSS_R_ANIME = "https://www.reddit.com/r/anime/new/.rss"
 RSS_R_OTP = "https://www.reddit.com/r/OneTruthPrevails/new/.rss"
 RSS_R_DC = "https://www.reddit.com/r/DetectiveConan/new/.rss"
+RSS_CRUNCHYROLL = "https://feeds.feedburner.com/crunchyroll/news"
+RSS_ANIME_CORNER = "https://animecorner.me/feed/"
+RSS_HONEYS = "https://honeysanime.com/feed/"
+JIKAN_BASE = "https://api.jikan.moe/v4"
 
 if not BOT_TOKEN or not CHAT_ID:
     logging.error("CRITICAL: BOT_TOKEN or CHAT_ID is missing.")
@@ -248,7 +254,7 @@ def load_posted_titles(date_obj):
         logging.error(f"Failed to load posted titles: {e}")
         return set()
 
-def record_post(title, source_code, run_id, slot, posted_titles_set):
+def record_post(title, source_code, run_id, slot, posted_titles_set, category=None):
     key = get_normalized_key(title)
     if key in posted_titles_set: return False
     
@@ -258,7 +264,8 @@ def record_post(title, source_code, run_id, slot, posted_titles_set):
             supabase.table("posted_news").insert({
                 "normalized_title": key, "posted_date": str(date_obj), "full_title": title,
                 "posted_at": datetime.now(utc_tz).isoformat(), "source": source_code,
-                "run_id": run_id if not str(run_id).startswith("local") else None, "slot": slot
+                "run_id": run_id if not str(run_id).startswith("local") else None, "slot": slot,
+                "category": category
             }).execute()
             posted_titles_set.add(key)
             increment_post_counters(date_obj)
@@ -404,6 +411,11 @@ def parse_reddit_rss(soup):
                 article_url=link,
                 image=image_url
             )
+            
+            # Extract Reddit Flair/Category
+            cats = [c.get("term") for c in entry.find_all("category") if c.get("term")]
+            if cats: item.category = cats[0]
+
             item.summary = "Reddit Discussion" # Default
             items.append(item)
             
@@ -468,14 +480,158 @@ def parse_ani_rss(soup):
                 source="ANI",
                 article_url=link,
                 image=image_url,
+                image=image_url,
                 summary=summary_text if summary_text else "Read more on Anime News India."
             )
+
+            # Extract Category
+            cats = [c.text for c in entry.find_all("category")]
+            if cats: item.category = cats[0] # Use first category
+
             items.append(item)
 
         except Exception as e:
             logging.error(f"Error parsing ANI item: {e}")
             continue
 
+    return items
+
+def parse_general_rss(soup, source_code):
+    """
+    Parses generic RSS feeds (Crunchyroll, Anime Corner, Honey's Anime).
+    Most use standard <item> with <pubDate> and <description>/<content:encoded>.
+    """
+    items = []
+    entries = soup.find_all("item")
+    if not entries: return []
+
+    today = now_local().date()
+    yesterday = today - timedelta(days=1)
+
+    for entry in entries:
+        try:
+            # 1. Date Check
+            pub_date_tag = entry.find("pubDate")
+            if pub_date_tag:
+                 try:
+                    dt = datetime.strptime(pub_date_tag.text.strip(), "%a, %d %b %Y %H:%M:%S %z")
+                    pub_date = dt.astimezone(local_tz).date()
+                    if not DEBUG_MODE and pub_date not in [today, yesterday]:
+                        continue
+                 except: pass # Proceed if date parsing fails, strictly speaking we should filter but some feeds format oddly
+
+            title = entry.find("title").text
+            link = entry.find("link").text if entry.find("link") else None
+            
+            # 2. Image Extraction
+            image_url = None
+            # Standard RSS 'enclosure'
+            enclosure = entry.find("enclosure")
+            if enclosure and "image" in enclosure.get("type", ""):
+                image_url = enclosure.get("url")
+            
+            # Media:content (common in FeedBurner/WordPress)
+            if not image_url:
+                media = entry.find("media:content") or entry.find("media:thumbnail")
+                if media: image_url = media.get("url")
+
+            # Content scraping for image
+            if not image_url:
+                content = entry.find("content:encoded") or entry.find("description")
+                if content:
+                    c_soup = BeautifulSoup(content.text, "html.parser")
+                    img = c_soup.find("img")
+                    if img: image_url = img.get("src")
+
+            # 3. Summary
+            summary_text = "No summary."
+            desc = entry.find("description")
+            if desc:
+                summary_text = clean_text_extractor(BeautifulSoup(desc.text, "html.parser"))
+                if len(summary_text) > 300: summary_text = summary_text[:300] + "..."
+
+            item = NewsItem(
+                title=title,
+                source=source_code,
+                article_url=link,
+                image=image_url,
+                summary=summary_text
+            )
+
+            # Extract Category
+            cats = [c.text for c in entry.find_all("category")]
+            if cats: item.category = cats[0]
+
+            items.append(item)
+
+        except Exception as e:
+            logging.error(f"Error parsing RSS {source_code}: {e}")
+            continue
+            
+    return items
+
+def fetch_jikan_mal():
+    """
+    Fetches news for Top 5 Airing Anime via Jikan API.
+    """
+    session = get_scraping_session()
+    items = []
+    try:
+        # 1. Get Top Anime
+        top_url = f"{JIKAN_BASE}/top/anime?filter=airing&limit=5"
+        r = session.get(top_url, timeout=20)
+        r.raise_for_status()
+        data = r.json().get("data", [])
+        
+        for anime in data:
+            if not circuit_breaker.can_call("MAL"): break
+            
+            anime_id = anime.get("mal_id")
+            anime_title = anime.get("title")
+            if not anime_id: continue
+            
+            # Rate limit pause (Jikan is strict)
+            time.sleep(1.0) 
+            
+            # 2. Get News for this anime
+            news_url = f"{JIKAN_BASE}/anime/{anime_id}/news"
+            try:
+                nr = session.get(news_url, timeout=20)
+                if nr.status_code == 429:
+                    logging.warning("Jikan Rate Limit Hit")
+                    break
+                nr.raise_for_status()
+                news_data = nr.json().get("data", [])
+                
+                for n in news_data:
+                    # Filter by date? Jikan news dates are ISO8601
+                    # "date": "2024-01-18T..."
+                    # Check recentness if possible, but Jikan returns sorted by date usually.
+                    
+                    title = n.get("title")
+                    url = n.get("url")
+                    image = n.get("images", {}).get("jpg", {}).get("image_url")
+                    excerpt = n.get("excerpt", "News about " + anime_title)
+                    
+                    # Store
+                    item = NewsItem(
+                        title=f"{anime_title}: {title}",
+                        source="MAL",
+                        article_url=url,
+                        image=image,
+                        summary=excerpt
+                    )
+                    items.append(item)
+                    
+            except Exception as e:
+                logging.error(f"Failed to fetch MAL news for {anime_id}: {e}")
+                
+    except Exception as e:
+        logging.error(f"Jikan Top Anime fetch failed: {e}")
+        circuit_breaker.record_failure("MAL")
+    finally:
+        session.close()
+    
     return items
 
 def fetch_details_concurrently(items):
@@ -525,47 +681,84 @@ def fetch_details_concurrently(items):
     with ThreadPoolExecutor(max_workers=5) as ex:
         ex.map(get_details, items)
     # --- 8. TELEGRAM SENDER ---
+    return items
+
+def get_smart_tag_key(item: NewsItem):
+    """
+    Determines the tag KEY based on content.
+    """
+    text = (item.title + " " + (item.summary or "") + " " + (item.category or "")).lower()
+    
+    if item.category:
+        cat = item.category.lower()
+        if "review" in cat: return "REVIEW"
+        if "editorial" in cat: return "EDITORIAL"
+        if "interview" in cat: return "INTERVIEW"
+        if "cosplay" in cat: return "COSPLAY"
+        if "quiz" in cat: return "QUIZ"
+        if "gallery" in cat: return "GALLERY"
+
+    # Keyword Scanning
+    if any(x in text for x in ["episode", "preview", "broadcast", "airing"]): return "EPISODE"
+    if any(x in text for x in ["chapter", "manga", "volume", "tankobon"]): return "MANGA"
+    if any(x in text for x in ["movie", "film", "cinema", "theatrical", "theater"]): return "MOVIE"
+    if any(x in text for x in ["figure", "merch", "goods", "nendoroid", "plush"]): return "MERCH"
+    if any(x in text for x in ["game", "mobile game", "visual novel", "nintendo", "ps5"]): return "GAME"
+    if any(x in text for x in ["music", "opening", "ending", "op/ed", "soundtrack", "ost"]): return "MUSIC"
+    if any(x in text for x in ["cast", "staff", "voice actor", "seiyuu"]): return "CAST"
+    if "trailer" in text or "pv" in text: return "TRAILER"
+        
+    return None
+
 def format_message(item: NewsItem):
-    # Custom formats for each source with proper JSON processing
+    # Source Configs
     source_configs = {
-        "ANN": {
-            "emoji": "📺",
-            "tag": "ANIME NEWS",
-            "color": "🔴",
-            "source_name": "Anime News Network"
-        },
-        "ANN_DC": {
-            "emoji": "🕵️", 
-            "tag": "CONAN NEWS",
-            "color": "🔵",
-            "source_name": "ANN (Detective Conan)"
-        },
-        "DCW": {
-            "emoji": "📚",
-            "tag": "WIKI UPDATE", 
-            "color": "🟢",
-            "source_name": "Detective Conan Wiki"
-        },
-        "TMS": {
-            "emoji": "🎬",
-            "tag": "TMS UPDATE",
-            "color": "🟡", 
-            "source_name": "TMS Entertainment"
-        },
-        "FANDOM": {
-            "emoji": "🌐",
-            "tag": "FANDOM NEWS",
-            "color": "🟣",
-            "source_name": "Fandom Wiki"
-        }
+        "ANN": { "emoji": "📰", "tag": "ANIME NEWS", "color": "🔴", "source_name": "Anime News Network" },
+        "ANN_DC": { "emoji": "🕵️", "tag": "CONAN NEWS", "color": "🔵", "source_name": "ANN (Detective Conan)" },
+        "DCW": { "emoji": "📚", "tag": "WIKI UPDATE", "color": "🟢", "source_name": "Detective Conan Wiki" },
+        "TMS": { "emoji": "🎬", "tag": "TMS UPDATE", "color": "🟡", "source_name": "TMS Entertainment" },
+        "FANDOM": { "emoji": "🌐", "tag": "FANDOM NEWS", "color": "🟣", "source_name": "Fandom Wiki" },
+        "MAL": { "emoji": "📈", "tag": "MAL TRENDING", "color": "🔵", "source_name": "MyAnimeList" },
+        "CR": { "emoji": "🟠", "tag": "CRUNCHYROLL", "color": "🟠", "source_name": "Crunchyroll News" },
+        "AC": { "emoji": "🏯", "tag": "ANIME CORNER", "color": "🔴", "source_name": "Anime Corner" },
+        "HONEY": { "emoji": "🍯", "tag": "HONEY'S ANIME", "color": "🟡", "source_name": "Honey's Anime" },
+        "ANI": { "emoji": "🇮🇳", "tag": "ANIME INDIA", "color": "🟠", "source_name": "Anime News India" },
+        "R_ANIME": { "emoji": "💬", "tag": "REDDIT ANIME", "color": "⚪", "source_name": "r/anime" },
+        "R_OTP": { "emoji": "🕵️", "tag": "REDDIT CONAN", "color": "🔵", "source_name": "r/OneTruthPrevails" },
+        "R_DC": { "emoji": "🕵️", "tag": "REDDIT CONAN", "color": "🔵", "source_name": "r/DetectiveConan" },
     }
     
+    # Tag Configs (The "JSON" features requested)
+    tag_configs = {
+        "REVIEW": { "emoji": "📝", "tag": "REVIEW", "color": "🟡" },
+        "EDITORIAL": { "emoji": "🖊️", "tag": "EDITORIAL", "color": "⚪" },
+        "INTERVIEW": { "emoji": "🎤", "tag": "INTERVIEW", "color": "🟣" },
+        "COSPLAY": { "emoji": "🎭", "tag": "COSPLAY", "color": "🌸" },
+        "QUIZ": { "emoji": "❓", "tag": "QUIZ", "color": "🔵" },
+        "GALLERY": { "emoji": "🖼️", "tag": "GALLERY", "color": "🟠" },
+        "EPISODE": { "emoji": "📺", "tag": "EPISODE UPDATE", "color": "🔴" },
+        "MANGA": { "emoji": "📖", "tag": "MANGA UPDATE", "color": "🟢" },
+        "MOVIE": { "emoji": "🎬", "tag": "MOVIE NEWS", "color": "🎥" },
+        "MERCH": { "emoji": "🎁", "tag": "MERCHANDISE", "color": "🟠" },
+        "GAME": { "emoji": "🎮", "tag": "GAMING NEWS", "color": "👾" },
+        "MUSIC": { "emoji": "🎵", "tag": "MUSIC NEWS", "color": "🎹" },
+        "CAST": { "emoji": "🎙️", "tag": "CAST & STAFF", "color": "🔵" },
+        "TRAILER": { "emoji": "🎞️", "tag": "TRAILER / PV", "color": "🎬" }
+    }
+    
+    # Default Config
     config = source_configs.get(item.source, {
-        "emoji": "📰",
-        "tag": "NEWS UPDATE", 
-        "color": "⚪",
-        "source_name": item.source
+        "emoji": "📰", "tag": "NEWS UPDATE", "color": "⚪", "source_name": item.source
     })
+
+    # Apply Smart Tagging
+    # Note: Logic moved to get_smart_tag_key for cleanliness
+    tag_key = get_smart_tag_key(item)
+    if tag_key and tag_key in tag_configs:
+        tc = tag_configs[tag_key]
+        config["emoji"] = tc["emoji"]
+        config["tag"] = tc["tag"]
+        config["color"] = tc["color"]
     
     # Safe text processing with proper escaping
     title = escape_html(str(item.title)) if item.title else "No Title"
@@ -602,7 +795,16 @@ def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
     title = str(item.title) if item.title else "No Title"
     if get_normalized_key(title) in posted_set: return False
 
-    if not record_post(title, item.source, run_id, slot, posted_set):
+    # Determine Tag
+    tag_key = get_smart_tag_key(item)
+    tag_label = None
+    if tag_key:
+        # Re-access tag configs if needed, or just use the key. 
+        # But we really want the display tag 'MANGA UPDATE' or just the key 'MANGA'? 
+        # For DB, the key or item.category is fine.
+        tag_label = tag_key 
+
+    if not record_post(title, item.source, run_id, slot, posted_set, category=tag_label or item.category):
         return False
 
     msg = format_message(item)
@@ -791,6 +993,26 @@ def run_once():
     if circuit_breaker.can_call("R_DC"):
         r_dc = fetch_rss(RSS_R_DC, "R_DC", parse_reddit_rss)
         all_items.extend(r_dc)
+
+    # Crunchyroll
+    if circuit_breaker.can_call("CR"):
+        cr_items = fetch_rss(RSS_CRUNCHYROLL, "CR", lambda s: parse_general_rss(s, "CR"))
+        all_items.extend(cr_items)
+
+    # Anime Corner
+    if circuit_breaker.can_call("AC"):
+        ac_items = fetch_rss(RSS_ANIME_CORNER, "AC", lambda s: parse_general_rss(s, "AC"))
+        all_items.extend(ac_items)
+
+    # Honey's Anime
+    if circuit_breaker.can_call("HONEY"):
+        honey_items = fetch_rss(RSS_HONEYS, "HONEY", lambda s: parse_general_rss(s, "HONEY"))
+        all_items.extend(honey_items)
+
+    # MAL (Jikan)
+    if circuit_breaker.can_call("MAL"):
+        mal_items = fetch_jikan_mal()
+        all_items.extend(mal_items)
 
     # (Add other sources DCW, TMS, FANDOM following similar pattern...)
 
