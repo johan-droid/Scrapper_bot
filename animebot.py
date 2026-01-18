@@ -480,7 +480,6 @@ def parse_ani_rss(soup):
                 source="ANI",
                 article_url=link,
                 image=image_url,
-                image=image_url,
                 summary=summary_text if summary_text else "Read more on Anime News India."
             )
 
