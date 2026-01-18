@@ -56,6 +56,7 @@ SESSION_ID = str(uuid.uuid4())[:8]
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+REDDIT_CHANNEL_ID = os.getenv("REDDIT_CHANNEL_ID")
 ADMIN_ID = os.getenv("ADMIN_ID")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -833,9 +834,14 @@ def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
     sent = False
     
     try:
+        if item.source in ["R_ANIME", "R_OTP", "R_DC"] and REDDIT_CHANNEL_ID:
+            target_chat_id = REDDIT_CHANNEL_ID
+        else:
+            target_chat_id = CHAT_ID
+
         # Prepare payload with proper JSON structure
         base_payload = {
-            "chat_id": CHAT_ID,
+            "chat_id": target_chat_id,
             "parse_mode": "HTML",
             "disable_web_page_preview": False
         }
