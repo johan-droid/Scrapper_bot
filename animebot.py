@@ -29,6 +29,7 @@ class NewsItem:
         publish_date: Optional[datetime] = None,
         tags: Optional[List[str]] = None,
         author: Optional[str] = None,
+        category: Optional[str] = None,  # <--- Added parameter
         **kwargs: Any
     ):
         self.title = title
@@ -39,6 +40,8 @@ class NewsItem:
         self.publish_date = publish_date
         self.tags = tags or []
         self.author = author
+        self.category = category  # <--- Added initialization
+        
         # Store any additional fields that might be passed in
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -121,7 +124,7 @@ RSS_ANI = "https://animenewsindia.com/feed/"
 RSS_R_ANIME = "https://www.reddit.com/r/anime/new/.rss"
 RSS_R_OTP = "https://www.reddit.com/r/OneTruthPrevails/new/.rss"
 RSS_R_DC = "https://www.reddit.com/r/DetectiveConan/new/.rss"
-RSS_CRUNCHYROLL = "https://feeds.feedburner.com/crunchyroll/news"
+RSS_CRUNCHYROLL = "https://cr-news-api-service.prd.crunchyrollsvc.com/v1/en-US/rss"
 RSS_ANIME_CORNER = "https://animecorner.me/feed/"
 RSS_HONEYS = "https://honeysanime.com/feed/"
 JIKAN_BASE = "https://api.jikan.moe/v4"
