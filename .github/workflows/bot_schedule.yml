@@ -32,6 +32,7 @@ jobs:
           # Secrets must be configured in Repo Settings > Secrets > Actions
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          REDDIT_CHANNEL_ID: ${{ secrets.REDDIT_CHANNEL_ID }}  # <--- ADD THIS LINE
           ADMIN_ID: ${{ secrets.ADMIN_ID }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
