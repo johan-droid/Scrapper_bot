@@ -102,9 +102,16 @@ RSS_ANIME_CORNER = "https://animecorner.me/feed/"
 RSS_HONEYS = "https://honeysanime.com/feed/"
 JIKAN_BASE = "https://api.jikan.moe/v4"
 
+# Channel routing configuration
+REDDIT_SOURCES = {"R_ANIME", "R_OTP", "R_DC"}
+NEWS_SOURCES = {"ANN", "ANN_DC", "DCW", "TMS", "FANDOM", "ANI", "MAL", "CR", "AC", "HONEY"}
+
 if not BOT_TOKEN or not CHAT_ID:
     logging.error("CRITICAL: BOT_TOKEN or CHAT_ID is missing.")
     raise SystemExit(1)
+
+if not REDDIT_CHANNEL_ID:
+    logging.warning("REDDIT_CHANNEL_ID not set - Reddit posts will go to main channel")
 
 utc_tz = pytz.utc
 local_tz = pytz.timezone("Asia/Kolkata")
@@ -122,7 +129,7 @@ if SUPABASE_URL and SUPABASE_KEY and create_client:
 elif SUPABASE_URL and not create_client:
     raise SystemExit("CRITICAL: Supabase URL found but 'supabase' library missing.")
 else:
-    logging.warning("⚠️ Running WITHOUT database. Duplicates will occur if runs restart.")
+    logging.warning("WARNING: Running WITHOUT database. Duplicates will occur if runs restart.")
 
 # --- 3. SESSION HELPERS ---
 def get_scraping_session():
@@ -729,19 +736,19 @@ def get_smart_tag_key(item: NewsItem):
 def format_message(item: NewsItem):
     # Source Configs
     source_configs = {
-        "ANN": { "emoji": "📰", "tag": "ANIME NEWS", "color": "🔴", "source_name": "Anime News Network" },
-        "ANN_DC": { "emoji": "🕵️", "tag": "CONAN NEWS", "color": "🔵", "source_name": "ANN (Detective Conan)" },
-        "DCW": { "emoji": "📚", "tag": "WIKI UPDATE", "color": "🟢", "source_name": "Detective Conan Wiki" },
-        "TMS": { "emoji": "🎬", "tag": "TMS UPDATE", "color": "🟡", "source_name": "TMS Entertainment" },
-        "FANDOM": { "emoji": "🌐", "tag": "FANDOM NEWS", "color": "🟣", "source_name": "Fandom Wiki" },
-        "MAL": { "emoji": "📈", "tag": "MAL TRENDING", "color": "🔵", "source_name": "MyAnimeList" },
-        "CR": { "emoji": "🟠", "tag": "CRUNCHYROLL", "color": "🟠", "source_name": "Crunchyroll News" },
-        "AC": { "emoji": "🏯", "tag": "ANIME CORNER", "color": "🔴", "source_name": "Anime Corner" },
-        "HONEY": { "emoji": "🍯", "tag": "HONEY'S ANIME", "color": "🟡", "source_name": "Honey's Anime" },
-        "ANI": { "emoji": "🇮🇳", "tag": "ANIME INDIA", "color": "🟠", "source_name": "Anime News India" },
-        "R_ANIME": { "emoji": "💬", "tag": "REDDIT ANIME", "color": "⚪", "source_name": "r/anime" },
-        "R_OTP": { "emoji": "🕵️", "tag": "REDDIT CONAN", "color": "🔵", "source_name": "r/OneTruthPrevails" },
-        "R_DC": { "emoji": "🕵️", "tag": "REDDIT CONAN", "color": "🔵", "source_name": "r/DetectiveConan" },
+        "ANN": { "emoji": "📰", "tag": "ANIME NEWS", "color": "🔴", "source_name": "Anime News Network", "channel_tag": "@Detective_Conan_News" },
+        "ANN_DC": { "emoji": "🕵️", "tag": "CONAN NEWS", "color": "🔵", "source_name": "ANN (Detective Conan)", "channel_tag": "@Detective_Conan_News" },
+        "DCW": { "emoji": "📚", "tag": "WIKI UPDATE", "color": "🟢", "source_name": "Detective Conan Wiki", "channel_tag": "@Detective_Conan_News" },
+        "TMS": { "emoji": "🎬", "tag": "TMS UPDATE", "color": "🟡", "source_name": "TMS Entertainment", "channel_tag": "@Detective_Conan_News" },
+        "FANDOM": { "emoji": "🌐", "tag": "FANDOM NEWS", "color": "🟣", "source_name": "Fandom Wiki", "channel_tag": "@Detective_Conan_News" },
+        "MAL": { "emoji": "📈", "tag": "MAL TRENDING", "color": "🔵", "source_name": "MyAnimeList", "channel_tag": "@Detective_Conan_News" },
+        "CR": { "emoji": "🟠", "tag": "CRUNCHYROLL", "color": "🟠", "source_name": "Crunchyroll News", "channel_tag": "@Detective_Conan_News" },
+        "AC": { "emoji": "🏯", "tag": "ANIME CORNER", "color": "🔴", "source_name": "Anime Corner", "channel_tag": "@Detective_Conan_News" },
+        "HONEY": { "emoji": "🍯", "tag": "HONEY'S ANIME", "color": "🟡", "source_name": "Honey's Anime", "channel_tag": "@Detective_Conan_News" },
+        "ANI": { "emoji": "🇮🇳", "tag": "ANIME INDIA", "color": "🟠", "source_name": "Anime News India", "channel_tag": "@Detective_Conan_News" },
+        "R_ANIME": { "emoji": "💬", "tag": "REDDIT DISCUSSION", "color": "⚪", "source_name": "r/anime", "channel_tag": "@Detective_Conan_Reddit" },
+        "R_OTP": { "emoji": "🕵️", "tag": "REDDIT CONAN", "color": "🔵", "source_name": "r/OneTruthPrevails", "channel_tag": "@Detective_Conan_Reddit" },
+        "R_DC": { "emoji": "🕵️", "tag": "REDDIT CONAN", "color": "🔵", "source_name": "r/DetectiveConan", "channel_tag": "@Detective_Conan_Reddit" },
     }
     
     # Tag Configs (The "JSON" features requested)
@@ -764,7 +771,7 @@ def format_message(item: NewsItem):
     
     # Default Config
     config = source_configs.get(item.source, {
-        "emoji": "📰", "tag": "NEWS UPDATE", "color": "⚪", "source_name": item.source
+        "emoji": "📰", "tag": "NEWS UPDATE", "color": "⚪", "source_name": item.source, "channel_tag": "@Detective_Conan_News"
     })
 
     # Apply Smart Tagging
@@ -787,7 +794,7 @@ def format_message(item: NewsItem):
         f"<b>{title}</b>",
         f"<i>{summary}</i>",
         f"📊 <b>Source:</b> {config['source_name']}",
-        f"📢 <b>Channel:</b> @Detective_Conan_News"
+        f"📢 <b>Channel:</b> {config['channel_tag']}"
     ]
     
     # Add link only if valid
@@ -806,6 +813,12 @@ def format_message(item: NewsItem):
         logging.error(f"Message encoding failed: {e}")
         # Fallback to simple message
         return f"<b>{title}</b>\n\n{summary}\n\n📊 Source: {config['source_name']}"
+
+def get_target_channel(source):
+    """Determine which channel to send the post to based on source"""
+    if source in REDDIT_SOURCES and REDDIT_CHANNEL_ID:
+        return REDDIT_CHANNEL_ID
+    return CHAT_ID
 
 def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
     title = str(item.title) if item.title else "No Title"
@@ -834,10 +847,17 @@ def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
     sent = False
     
     try:
-        if item.source in ["R_ANIME", "R_OTP", "R_DC"] and REDDIT_CHANNEL_ID:
-            target_chat_id = REDDIT_CHANNEL_ID
-        else:
-            target_chat_id = CHAT_ID
+        # Use the helper function to get correct channel
+        target_chat_id = get_target_channel(item.source)
+        
+        # Validate channel ID
+        if not target_chat_id:
+            logging.error(f"No valid channel ID for source {item.source}")
+            return False
+        
+        # Log which channel we're sending to
+        channel_type = "Reddit" if item.source in REDDIT_SOURCES else "News"
+        logging.info(f"Sending {channel_type} post to channel {target_chat_id}: {title[:50]}...")
 
         # Prepare payload with proper JSON structure
         base_payload = {
@@ -895,7 +915,7 @@ def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
 def send_admin_report(run_id, status, posts_sent, source_counts, error=None):
     """
     Sends a comprehensive report to the ADMIN_ID after each cycle.
-    Includes: Present stats, Past record, Health warnings, Source breakdown.
+    Includes: Present stats, Past record, Health warnings, Source breakdown, Channel distribution.
     """
     if not ADMIN_ID: return # Skip if no admin configured
 
@@ -903,6 +923,10 @@ def send_admin_report(run_id, status, posts_sent, source_counts, error=None):
     dt = now_local()
     date_str = str(dt.date())
     slot = slot_index(dt)
+    
+    # Calculate channel distribution
+    news_posts = sum(count for source, count in source_counts.items() if source in NEWS_SOURCES)
+    reddit_posts = sum(count for source, count in source_counts.items() if source in REDDIT_SOURCES)
     
     # Fetch Daily Total
     daily_total = 0
@@ -943,6 +967,8 @@ def send_admin_report(run_id, status, posts_sent, source_counts, error=None):
         f"<b>📊 Present Cycle</b>\n"
         f"• Status: {status.upper()}\n"
         f"• Posts Sent: {posts_sent}\n"
+        f"• News Channel: {news_posts}\n"
+        f"• Reddit Channel: {reddit_posts}\n"
         f"• Breakdown:\n{source_stats}\n\n"
         
         f"<b>📈 Statistics</b>\n"

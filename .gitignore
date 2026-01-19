@@ -159,7 +159,16 @@ Thumbs.db
 posted_titles.json
 anime_news_bot.log
 config.json
-test_scrape.py
+source_health.json
+CONNECTION_FIXES.md
+CHANNEL_ROUTING_FIX.md
+test_fixes.py
+test_channels.py
+test_syntax.py
+source_monitor.py
+models.py
+utils.py
+.env.test
 
 # Temporary files
 *.tmp
