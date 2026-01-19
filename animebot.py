@@ -773,9 +773,9 @@ def format_message(item: NewsItem):
         "AC": { "emoji": "🏯", "tag": "ANIME CORNER", "color": "🔴", "source_name": "Anime Corner", "channel_tag": "@Detective_Conan_News" },
         "HONEY": { "emoji": "🍯", "tag": "HONEY'S ANIME", "color": "🟡", "source_name": "Honey's Anime", "channel_tag": "@Detective_Conan_News" },
         "ANI": { "emoji": "🇮🇳", "tag": "ANIME INDIA", "color": "🟠", "source_name": "Anime News India", "channel_tag": "@Detective_Conan_News" },
-        "R_ANIME": { "emoji": "💬", "tag": "REDDIT DISCUSSION", "color": "⚪", "source_name": "r/anime", "channel_tag": "@Detective_Conan_Reddit" },
-        "R_OTP": { "emoji": "🕵️", "tag": "REDDIT CONAN", "color": "🔵", "source_name": "r/OneTruthPrevails", "channel_tag": "@Detective_Conan_Reddit" },
-        "R_DC": { "emoji": "🕵️", "tag": "REDDIT CONAN", "color": "🔵", "source_name": "r/DetectiveConan", "channel_tag": "@Detective_Conan_Reddit" },
+        "R_ANIME": { "emoji": "💬", "tag": "REDDIT DISCUSSION", "color": "⚪", "source_name": "r/anime", "channel_tag": "@Redditposting_DCN" },
+        "R_OTP": { "emoji": "🕵️", "tag": "REDDIT CONAN", "color": "🔵", "source_name": "r/OneTruthPrevails", "channel_tag": "@Redditposting_DCN" },
+        "R_DC": { "emoji": "🕵️", "tag": "REDDIT CONAN", "color": "🔵", "source_name": "r/DetectiveConan", "channel_tag": "@Redditposting_DCN" },
     }
     
     # Tag Configs (The "JSON" features requested)
