@@ -14,6 +14,34 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from dotenv import load_dotenv
 from collections import defaultdict
+from typing import Optional, List, Dict, Any
+
+
+class NewsItem:
+    """Represents a news item with metadata from various sources."""
+    def __init__(
+        self,
+        title: str,
+        source: str,
+        article_url: str,
+        summary_text: Optional[str] = None,
+        image_url: Optional[str] = None,
+        publish_date: Optional[datetime] = None,
+        tags: Optional[List[str]] = None,
+        author: Optional[str] = None,
+        **kwargs: Any
+    ):
+        self.title = title
+        self.source = source
+        self.article_url = article_url
+        self.summary_text = summary_text
+        self.image_url = image_url
+        self.publish_date = publish_date
+        self.tags = tags or []
+        self.author = author
+        # Store any additional fields that might be passed in
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
 # --- 1. SETUP & CONFIGURATION ---
 try:
@@ -30,11 +58,7 @@ except Exception as e:
     logging.warning(f"Supabase import failed: {e}")
     create_client = None
 
-try:
-    from models import NewsItem
-except ImportError:
-    # Fallback for when models.py isn't found (shouldn't happen in correct setup)
-    logging.warning("Could not import NewsItem from models") 
+# NewsItem class is now defined above
 
 try:
     from utils import clean_text_extractor
