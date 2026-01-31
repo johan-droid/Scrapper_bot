@@ -10,7 +10,7 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
-from convert_date import convert_date # This implies a local module, but I'll stick to stdlib if not present. Ignoring.
+# from convert_date import convert_date  <-- REMOVE THIS LINE
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -176,9 +176,15 @@ ANIME_NEWS_SOURCES = {"ANN", "ANI", "MAL", "CR", "AC", "HONEY"}
 WORLD_NEWS_SOURCES = {"AP", "REUTERS"}
 ALL_NEWS_SOURCES = DC_NEWS_SOURCES | ANIME_NEWS_SOURCES | WORLD_NEWS_SOURCES
 
-if not BOT_TOKEN or not CHAT_ID:
-    logging.error("CRITICAL: BOT_TOKEN or CHAT_ID is missing.")
+if not BOT_TOKEN:
+    logging.error("CRITICAL: BOT_TOKEN is missing.")
     raise SystemExit(1)
+
+if not CHAT_ID:
+    logging.warning("CHAT_ID is missing. Default channel fallbacks must be set.")
+    # If using specific channels, this might be intentional.
+    if not ANIME_NEWS_CHANNEL_ID:
+         logging.warning("WARNING: Neither CHAT_ID nor ANIME_NEWS_CHANNEL_ID is set!")
 
 if not REDDIT_CHANNEL_ID:
     logging.warning("REDDIT_CHANNEL_ID not set - Reddit posts will go to main channel")
@@ -882,7 +888,7 @@ def get_target_channel(source):
         return ANIME_NEWS_CHANNEL_ID
     if source in WORLD_NEWS_SOURCES and WORLD_NEWS_CHANNEL_ID:
         return WORLD_NEWS_CHANNEL_ID
-    return CHAT_ID
+    return CHAT_ID or ANIME_NEWS_CHANNEL_ID
 
 def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
     # Skip pre-validation to save time and network footprint
