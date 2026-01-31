@@ -154,8 +154,27 @@ cython_debug/
 .DS_Store
 Thumbs.db
 
+# Project Specific - News Scrapers
+*.log
+news_update_*.txt
+debug_*.xml
+debug_*.py
+test_*.py
+quick_test.py
+integration_example.py
+setup_telegram_bot.py
+telegram_integration_test.py
+test_alternative_feeds.py
+rss_news_bot.py
+telegram_rss_bot.py
+rss_news_bot.log
+telegram_rss_bot.log
+news_scraper.log
+world_news_scraper.log
+bot_status_update.log
+supabase_schema_update.sql.backup
 
-# Project Specific
+# Original project files
 posted_titles.json
 anime_news_bot.log
 config.json
@@ -180,3 +199,14 @@ output.txt
 verification.txt
 inspection.txt
 format_out.txt
+
+# Image processing temp files
+*.jpg.tmp
+*.png.tmp
+processed_images/
+temp_uploads/
+
+# Telegram bot specific
+telegram_cache/
+bot_sessions/
+user_data.json

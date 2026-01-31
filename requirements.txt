@@ -7,3 +7,7 @@ Flask>=3.0.0
 python-dotenv
 pydantic
 lxml
+feedparser==6.0.10
+schedule==1.2.0
+Pillow==10.1.0
+python-telegram-bot==20.7
