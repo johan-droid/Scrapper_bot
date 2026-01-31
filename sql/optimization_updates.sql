@@ -21,4 +21,13 @@ $$ LANGUAGE plpgsql;
 CREATE INDEX IF NOT EXISTS idx_posted_news_lookup ON posted_news (normalized_title, posted_date);
 
 -- Ensure no two posts can have the same normalized title (Fail-safe deduplication)
+-- First, clean up existing duplicates by keeping only the most recent one
+DELETE FROM posted_news
+WHERE id NOT IN (
+    SELECT MAX(id)
+    FROM posted_news
+    GROUP BY normalized_title
+);
+
+-- Then add the constraint
 ALTER TABLE posted_news ADD CONSTRAINT unique_normalized_title UNIQUE (normalized_title);
