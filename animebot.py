@@ -111,6 +111,8 @@ logging.basicConfig(
     force=True,
 )
 
+SESSION_ID = str(uuid.uuid4())[:8]
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 REDDIT_CHANNEL_ID = os.getenv("REDDIT_CHANNEL_ID")
