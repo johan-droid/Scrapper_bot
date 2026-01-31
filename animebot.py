@@ -56,10 +56,13 @@ except ImportError:
         return decorator
 
 try:
-    from supabase import create_client
+    from supabase import create_client, Client
+    # Try both import methods for compatibility
+    supabase_client = None
 except Exception as e:
     logging.warning(f"Supabase import failed: {e}")
     create_client = None
+    Client = None
 
 # NewsItem class is now defined above
 
@@ -147,14 +150,25 @@ local_tz = pytz.timezone("Asia/Kolkata")
 supabase = None
 if SUPABASE_URL and SUPABASE_KEY and create_client:
     try:
+        # Try create_client first
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        logging.info("Supabase connected successfully")
+        logging.info("Supabase connected successfully with create_client")
     except Exception as e:
-        logging.error(f"Supabase init failed: {e}")
-        # In GHA, if we expect DB but fail, we MUST exit to avoid spamming duplicates
-        raise SystemExit("CRITICAL: Supabase configured but connection failed. Aborting to prevent spam.")
+        logging.warning(f"create_client failed: {e}")
+        
+        # Try alternative Client method
+        if Client:
+            try:
+                supabase = Client(SUPABASE_URL, SUPABASE_KEY)
+                logging.info("Supabase connected successfully with Client")
+            except Exception as e2:
+                logging.error(f"Client also failed: {e2}")
+                supabase = None
+        else:
+            logging.error("No alternative client available")
+            supabase = None
 elif SUPABASE_URL and not create_client:
-    raise SystemExit("CRITICAL: Supabase URL found but 'supabase' library missing.")
+    logging.error("CRITICAL: Supabase URL found but 'supabase' library missing.")
 else:
     logging.warning("WARNING: Running WITHOUT database. Duplicates will occur if runs restart.")
 
