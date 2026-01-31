@@ -150,25 +150,14 @@ local_tz = pytz.timezone("Asia/Kolkata")
 supabase = None
 if SUPABASE_URL and SUPABASE_KEY and create_client:
     try:
-        # Try create_client first
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        logging.info("Supabase connected successfully with create_client")
+        logging.info("Supabase connected successfully")
     except Exception as e:
-        logging.warning(f"create_client failed: {e}")
-        
-        # Try alternative Client method
-        if Client:
-            try:
-                supabase = Client(SUPABASE_URL, SUPABASE_KEY)
-                logging.info("Supabase connected successfully with Client")
-            except Exception as e2:
-                logging.error(f"Client also failed: {e2}")
-                supabase = None
-        else:
-            logging.error("No alternative client available")
-            supabase = None
-    elif SUPABASE_URL and not create_client:
-        logging.error("CRITICAL: Supabase URL found but 'supabase' library missing.")
+        logging.warning(f"Supabase connection failed: {e}")
+        logging.warning("WARNING: Running WITHOUT database. Duplicates may occur.")
+        supabase = None
+elif SUPABASE_URL and not create_client:
+    logging.warning("CRITICAL: Supabase URL found but 'supabase' library missing.")
 else:
     logging.warning("WARNING: Running WITHOUT database. Duplicates will occur if runs restart.")
 
@@ -359,7 +348,7 @@ def parse_ann(html):
             # Find initial summary if available (ANN usually has it in 'intro')
             intro = article.find("div", class_="intro") 
             if intro:
-                 item.summary = clean_text_extractor(intro) # Apply cleaning here too!
+                 item.summary_text = clean_text_extractor(intro) # Apply cleaning here too!
 
             out.append(item)
     return out
@@ -460,14 +449,14 @@ def parse_reddit_rss(soup):
                 title=title,
                 source=source_code,
                 article_url=link,
-                image=image_url
+                image_url=image_url
             )
             
             # Extract Reddit Flair/Category
             cats = [c.get("term") for c in entry.find_all("category") if c.get("term")]
             if cats: item.category = cats[0]
 
-            item.summary = "Reddit Discussion" # Default
+            item.summary_text = "Reddit Discussion" # Default
             items.append(item)
             
         except Exception as e:
@@ -531,8 +520,8 @@ def parse_ani_rss(soup):
                 title=title,
                 source="ANI",
                 article_url=link,
-                image=image_url,
-                summary=summary_text if summary_text else "Read more on Anime News India."
+                image_url=image_url,
+                summary_text=summary_text if summary_text else "Read more on Anime News India."
             )
 
             # Extract Category
@@ -606,8 +595,8 @@ def parse_general_rss(soup, source_code):
                 title=title,
                 source=source_code,
                 article_url=link,
-                image=image_url,
-                summary=summary_text
+                image_url=image_url,
+                summary_text=summary_text
             )
 
             # Extract Category
@@ -683,8 +672,8 @@ def fetch_jikan_mal():
                         title=f"{anime_title}: {title}",
                         source="MAL",
                         article_url=url,
-                        image=image,
-                        summary=excerpt
+                        image_url=image,
+                        summary_text=excerpt
                     )
                     items.append(item)
                     
@@ -710,10 +699,10 @@ def fetch_details_concurrently(items):
             # 1. OpenGraph First (Usually best quality)
             og_img = s.find("meta", property="og:image")
             if og_img and og_img.get("content"):
-                item.image = og_img["content"]
+                item.image_url = og_img["content"]
 
             # 2. Try text content/meat div (Fallback)
-            if not item.image:
+            if not item.image_url:
                 content_div = s.find("div", class_="meat") or s.find("div", class_="content")
                 if content_div:
                     for img in content_div.find_all("img"):
@@ -721,22 +710,22 @@ def fetch_details_concurrently(items):
                         if src and "spacer" not in src and "pixel" not in src and not src.endswith(".gif"):
                             if "facebook" in src or "twitter" in src: continue
                             full_src = f"{BASE_URL}{src}" if not src.startswith("http") else src
-                            item.image = full_src
+                            item.image_url = full_src
                             break
             
             # 3. Fallback to thumbnail
-            if not item.image:
+            if not item.image_url:
                 thumb = s.find("div", class_="thumbnail lazyload")
                 if thumb and thumb.get("data-src"): 
                     src = thumb['data-src']
-                    item.image = f"{BASE_URL}{src}" if not src.startswith("http") else src
+                    item.image_url = f"{BASE_URL}{src}" if not src.startswith("http") else src
 
             # Summary extraction
             div = s.find("div", class_="meat") or s.find("div", class_="content")
             if div:
                 # Use centralized utility for consistent cleaning
                 txt = clean_text_extractor(div)
-                item.summary = txt[:350] + "..." if len(txt) > 350 else txt
+                item.summary_text = txt[:350] + "..." if len(txt) > 350 else txt
         except Exception as e:
             logging.error(f"Details fetch failed for {item.article_url}: {e}")
         finally: session.close()
@@ -751,7 +740,7 @@ def get_smart_tag_key(item: NewsItem):
     """
     Determines the tag KEY based on content.
     """
-    text = (item.title + " " + (item.summary or "") + " " + (item.category or "")).lower()
+    text = (item.title + " " + (item.summary_text or "") + " " + (item.category or "")).lower()
     
     if item.category:
         cat = item.category.lower()
@@ -826,7 +815,7 @@ def format_message(item: NewsItem):
     
     # Safe text processing with proper escaping
     title = escape_html(str(item.title)) if item.title else "No Title"
-    summary = escape_html(str(item.summary)) if item.summary else "No summary available"
+    summary = escape_html(str(item.summary_text)) if item.summary_text else "No summary available"
     link = str(item.article_url) if item.article_url else ""
     
     # Build message components safely
@@ -907,11 +896,11 @@ def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
             "disable_web_page_preview": False
         }
         
-        if item.image and validate_image_url(item.image):
+        if item.image_url and validate_image_url(item.image_url):
             # Send as photo with caption
             photo_payload = base_payload.copy()
             photo_payload.update({
-                "photo": item.image,
+                "photo": item.image_url,
                 "caption": msg
             })
             response = sess.post(
