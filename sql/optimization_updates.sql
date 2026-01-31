@@ -19,3 +19,6 @@ $$ LANGUAGE plpgsql;
 
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_posted_news_lookup ON posted_news (normalized_title, posted_date);
+
+-- Ensure no two posts can have the same normalized title (Fail-safe deduplication)
+ALTER TABLE posted_news ADD CONSTRAINT unique_normalized_title UNIQUE (normalized_title);

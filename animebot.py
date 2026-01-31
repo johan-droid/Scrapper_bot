@@ -897,100 +897,68 @@ def get_target_channel(source):
     return CHAT_ID
 
 def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
-    title = str(item.title) if item.title else "No Title"
-    if get_normalized_key(title) in posted_set: return False
-
-    # Determine Tag
-    tag_key = get_smart_tag_key(item)
-    tag_label = None
-    if tag_key:
-        # Re-access tag configs if needed, or just use the key. 
-        # But we really want the display tag 'MANGA UPDATE' or just the key 'MANGA'? 
-        # For DB, the key or item.category is fine.
-        tag_label = tag_key 
-
-    if not record_post(title, item.source, run_id, slot, posted_set, category=tag_label or item.category):
-        return False
-
+    # Skip pre-validation to save time and network footprint
     msg = format_message(item)
+    target_chat_id = get_target_channel(item.source)
     
-    # Validate message before sending
-    if not msg or len(msg.strip()) == 0:
-        logging.error("Empty message generated, skipping send")
-        return False
-    
-    sess = get_fresh_telegram_session()
-    sent = False
-    
-    try:
-        # Use the helper function to get correct channel
-        target_chat_id = get_target_channel(item.source)
-        
-        # Validate channel ID
-        if not target_chat_id:
-            logging.error(f"No valid channel ID for source {item.source}")
-            return False
-        
-        # Log which channel we're sending to
-        channel_type = "Main/DC"
-        if item.source in REDDIT_SOURCES: channel_type = "Reddit"
-        elif item.source in WORLD_NEWS_SOURCES: channel_type = "World"
-        
-        logging.info(f"Sending {channel_type} post to channel {target_chat_id}: {title[:50]}...")
-
-        # Prepare payload with proper JSON structure
-        base_payload = {
-            "chat_id": target_chat_id,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": False
-        }
-        
-        payload = base_payload.copy()
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
-        if item.image_url and validate_image_url(item.image_url):
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-            payload.update({
-                "photo": item.image_url,
-                "caption": msg
-            })
-        else:
-            payload.update({
-                "text": msg
-            })
+    # Try sending with photo first
+    if item.image_url:
+        try:
+            # We use requests directly here for simplicity if session management is complex, 
+            # but using 'sess' from get_fresh_telegram_session is better for connection pooling.
+            sess = get_fresh_telegram_session()
+            response = sess.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                data={"chat_id": target_chat_id, "photo": item.image_url, "caption": msg, "parse_mode": "HTML"},
+                timeout=20
+            )
+            sess.close()
             
-        # Send with 429 Handling
-        response = sess.post(url, json=payload if "sendMessage" in url else None, data=payload if "sendPhoto" in url else None, timeout=20)
+            if response.status_code == 200:
+                logging.info(f"Message sent (Image): {item.title[:50]}")
+                return record_post(item.title, item.source, run_id, slot, posted_set)
+            elif response.status_code == 429:
+                retry_after = int(response.headers.get("Retry-After", 30))
+                logging.warning(f"Rate limited (Image). Sleeping {retry_after}s")
+                time.sleep(retry_after)
+                # Retry logic could go here, but for now we fall back or fail safe. 
+                # Let's fallback to text if image fails due to limits? No, limit means wait.
+                # Simple fallback:
+                logging.warning("Image send failed/limited, falling back to text...")
+        except Exception as e:
+            logging.warning(f"Image send failed for {item.title}, falling back to text: {e}")
+
+    # Fallback to text-only if no image or if sendPhoto failed
+    try:
+        sess = get_fresh_telegram_session()
+        response = sess.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id": target_chat_id, "text": msg, "parse_mode": "HTML"},
+            timeout=20
+        )
         
         if response.status_code == 429:
-            # Handle Telegram Rate Limit
-            retry_after = int(response.headers.get("Retry-After", 30))
-            logging.warning(f"Rate limited by Telegram. Sleeping {retry_after}s")
-            time.sleep(retry_after)
-            # Re-attempt once after sleep
-            response = sess.post(url, json=payload if "sendMessage" in url else None, data=payload if "sendPhoto" in url else None, timeout=20)
-
-        # Check response for proper JSON handling
-        if response.status_code == 200:
-            try:
-                response_json = response.json()
-                if response_json.get('ok'):
-                    sent = True
-                    logging.info(f"Message sent successfully: {title[:50]}...")
-                else:
-                    error_desc = response_json.get('description', 'Unknown error')
-                    logging.error(f"Telegram API error: {error_desc}")
-            except ValueError as e:
-                logging.error(f"Invalid JSON response from Telegram: {e}")
-        else:
-             logging.error(f"Telegram HTTP error: {response.status_code} - {response.text}")
-
-    except Exception as e:
-        logging.error(f"Telegram send failed: {type(e).__name__}: {str(e)[:200]}")
-    finally:
+             retry_after = int(response.headers.get("Retry-After", 30))
+             logging.warning(f"Rate limited (Text). Sleeping {retry_after}s")
+             time.sleep(retry_after)
+             response = sess.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json={"chat_id": target_chat_id, "text": msg, "parse_mode": "HTML"},
+                timeout=20
+            )
+        
         sess.close()
-    
-    return sent
+        
+        if response.status_code == 200:
+             logging.info(f"Message sent (Text): {item.title[:50]}")
+             return record_post(item.title, item.source, run_id, slot, posted_set)
+        else:
+             logging.error(f"Final send attempt failed: {response.text}")
+             return False
+             
+    except Exception as e:
+        logging.error(f"Final send attempt failed: {e}")
+        return False
 
 def send_admin_report(run_id, status, posts_sent, source_counts, error=None):
     """
