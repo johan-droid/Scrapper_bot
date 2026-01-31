@@ -152,6 +152,8 @@ SOURCE_LABEL = {
     "R_OTP": "Reddit (r/OneTruthPrevails)", "R_DC": "Reddit (r/DetectiveConan)",
     "MAL": "MyAnimeList (Jikan)", "CR": "Crunchyroll News",
     "AC": "Anime Corner", "HONEY": "Honey's Anime",
+    "AP": "AP News (Entertainment)",
+    "REUTERS": "Reuters (Lifestyle)",
 }
 
 # RSS Feeds
@@ -162,12 +164,15 @@ RSS_R_DC = "https://www.reddit.com/r/DetectiveConan/new/.rss"
 RSS_CRUNCHYROLL = "https://cr-news-api-service.prd.crunchyrollsvc.com/v1/en-US/rss"
 RSS_ANIME_CORNER = "https://animecorner.me/feed/"
 RSS_HONEYS = "https://honeysanime.com/feed/"
+RSS_HONEYS = "https://honeysanime.com/feed/"
 JIKAN_BASE = "https://api.jikan.moe/v4"
+BASE_URL_AP_NEWS = "https://apnews.com/hub/entertainment" # Targeting entertainment/pop culture or general top news
+BASE_URL_REUTERS = "https://www.reuters.com/lifestyle/" # Targeting lifestyle/entertainment section
 
 # Channel routing configuration
 REDDIT_SOURCES = {"R_ANIME", "R_OTP", "R_DC"}
 DC_NEWS_SOURCES = {"ANN_DC", "DCW", "TMS", "FANDOM"}
-WORLD_NEWS_SOURCES = {"ANN", "ANI", "MAL", "CR", "AC", "HONEY"}
+WORLD_NEWS_SOURCES = {"ANN", "ANI", "MAL", "CR", "AC", "HONEY", "AP", "REUTERS"}
 ALL_NEWS_SOURCES = DC_NEWS_SOURCES | WORLD_NEWS_SOURCES
 
 if not BOT_TOKEN or not CHAT_ID:
@@ -437,6 +442,127 @@ def parse_ann_dc(html):
     for i in items: 
         i.source = "ANN_DC"
         i.title = f"ANN DC News: {i.title}"
+    return items
+
+def parse_ap_html(html):
+    """
+    Parses AP News HTML since standard RSS is often deprecated or limited.
+    Targets article cards on standard AP Hub pages.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    items = []
+    
+    # AP News uses <div class="PageList-items-item"> for article cards
+    # or <div class="PagePromo"> depending on the layout.
+    # We target common container identifiers.
+    
+    # Strategy 1: PagePromo (Standard for Hubs)
+    cards = soup.find_all("div", class_="PagePromo")
+    
+    today = now_local().date()
+    # If standard cards aren't found, try fallback
+    if not cards:
+         cards = soup.select("div.PageList-items-item")
+         
+    for card in cards:
+        try:
+            content = card.find("div", class_="PagePromo-content")
+            if not content: content = card # Fallback
+            
+            title_tag = content.find("h3", class_="PagePromo-title")
+            if not title_tag: continue
+            
+            link_tag = title_tag.find("a")
+            if not link_tag: continue
+            
+            title = title_tag.get_text(" ", strip=True)
+            link = link_tag.get("href")
+            if link and not link.startswith("http"):
+                link = f"https://apnews.com{link}"
+                
+            # Date checking is hard on AP hub pages (often hidden or relative)
+            # We rely on deduplication database to avoid old news.
+            
+            # Image Isolation
+            img_url = None
+            media = card.find("div", class_="PagePromo-media")
+            if media:
+                img = media.find("img")
+                if img:
+                    img_url = img.get("src")
+            
+            # Summary
+            summary_tag = content.find("div", class_="PagePromo-description")
+            summary = clean_text_extractor(summary_tag) if summary_tag else ""
+
+            item = NewsItem(
+                title=title,
+                source="AP",
+                article_url=link,
+                image_url=img_url,
+                summary_text=summary
+            )
+            items.append(item)
+            
+        except Exception as e:
+            continue
+            
+    return items
+
+def parse_reuters_html(html):
+    """
+    Parses Reuters Lifestyle/Entertainment HTML pages.
+    Reuters is heavily JS-based but often renders initial content in standard tags or specific classes.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    items = []
+    
+    # Reuters uses `data-testid="MediaStoryCard"` usually
+    cards = soup.find_all("li", attrs={"data-testid": "story-card"})
+    if not cards:
+        cards = soup.select("li[class*='story-card']") # Fallback
+
+    for card in cards:
+        try:
+            # Title & Link
+            # Usually <a data-testid="Heading"> or similar
+            link_tag = card.find("a", attrs={"data-testid": ["Heading", "Link"]})
+            if not link_tag:
+                 # Backup plan: find any header link
+                 h2 = card.find("h2") or card.find("h3")
+                 if h2: link_tag = h2.find("a")
+            
+            if not link_tag: continue
+
+            title = link_tag.get_text(" ", strip=True)
+            link = link_tag.get("href")
+            if link and not link.startswith("http"):
+                link = f"https://www.reuters.com{link}"
+            
+            # Image
+            img_url = None
+            # Reuters usually lazy loads images, but 'src' might be there or 'srcset'
+            img = card.find("img")
+            if img:
+                img_url = img.get("src")
+            
+            # Summary - often missing on hub pages, check 'p' tags
+            summary = ""
+            p_tag = card.find("p")
+            if p_tag: summary = clean_text_extractor(p_tag)
+
+            item = NewsItem(
+                title=title,
+                source="REUTERS",
+                article_url=link,
+                image_url=img_url,
+                summary_text=summary
+            )
+            items.append(item)
+
+        except Exception: 
+            continue
+            
     return items
 
 def fetch_rss(url, source_name, parser_func):
@@ -1139,6 +1265,17 @@ def run_once():
     if circuit_breaker.can_call("HONEY"):
         honey_items = fetch_rss(RSS_HONEYS, "HONEY", lambda s: parse_general_rss(s, "HONEY"))
         all_items.extend(honey_items)
+
+    # AP News
+    if circuit_breaker.can_call("AP"):
+        ap_items = fetch_generic(BASE_URL_AP_NEWS, "AP", parse_ap_html)
+        # Limit AP items to avoid flooding generic news
+        all_items.extend(ap_items[:5])
+
+    # Reuters
+    if circuit_breaker.can_call("REUTERS"):
+        reuters_items = fetch_generic(BASE_URL_REUTERS, "REUTERS", parse_reuters_html)
+        all_items.extend(reuters_items[:5])
 
     # MAL (Jikan)
     if circuit_breaker.can_call("MAL"):
