@@ -225,6 +225,40 @@ def get_scraping_session():
     })
     return session
 
+# --- ENHANCED IMAGE EXTRACTION ---
+def extract_premium_image(article_url: str, session: requests.Session) -> Optional[str]:
+    """
+    Improved image extraction with smarter filtering.
+    """
+    if not article_url: return None
+    try:
+        # Some sites block headless requests, ensuring robust headers
+        res = session.get(article_url, timeout=15, stream=True) # Stream to check headers first? No, need content for soup.
+        # Check size limit? 
+        if int(res.headers.get("Content-Length", 0)) > 5 * 1024 * 1024: # Skip if > 5MB
+             return None
+             
+        soup = BeautifulSoup(res.content, 'html.parser')
+        
+        # Priority: Meta tags are usually highest quality
+        selectors = ['meta[property="og:image"]', 'meta[name="twitter:image"]']
+        for sel in selectors:
+            tag = soup.select_one(sel)
+            if tag and tag.get('content'):
+                return tag['content']
+        
+        # Content Body Extraction with enhanced exclusion list
+        exclude = ['logo', 'icon', 'avatar', 'pixel', 'spacer', 'banner-ad', 'tracker']
+        for img in soup.find_all('img', src=True):
+            src = img['src']
+            if not any(x in src.lower() for x in exclude) and src.startswith('http'):
+                # Heuristic: Larger images usually aren't icons. 
+                # We can't check size easily without downloading, so rely on 'exclude' list and position.
+                return src
+    except Exception as e:
+        logging.warning(f"Image extraction failed for {article_url}: {e}")
+    return None
+
 def get_fresh_telegram_session():
     tg_session = requests.Session()
     retry_strategy = Retry(
