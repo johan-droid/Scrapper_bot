@@ -167,8 +167,8 @@ if SUPABASE_URL and SUPABASE_KEY and create_client:
         else:
             logging.error("No alternative client available")
             supabase = None
-elif SUPABASE_URL and not create_client:
-    logging.error("CRITICAL: Supabase URL found but 'supabase' library missing.")
+    elif SUPABASE_URL and not create_client:
+        logging.error("CRITICAL: Supabase URL found but 'supabase' library missing.")
 else:
     logging.warning("WARNING: Running WITHOUT database. Duplicates will occur if runs restart.")
 
