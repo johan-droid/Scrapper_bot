@@ -18,7 +18,10 @@ Robust scraper bot for Telegram that fetches anime news from multiple sources (A
 2. **Environment Variables**:
    Create a `.env` file (or set GitHub Secrets):
    - `BOT_TOKEN`: Telegram Bot Token
-   - `CHAT_ID`: Channel ID (e.g., -100...)
+   - `CHAT_ID`: Main Channel ID (Detective Conan / Default)
+   - `REDDIT_CHANNEL_ID`: Channel ID for Reddit posts
+   - `ANIME_NEWS_CHANNEL_ID`: Channel ID for General Anime News
+   - `WORLD_NEWS_CHANNEL_ID`: Channel ID for World/Entertainment News
    - `ADMIN_ID`: Your Personal ID
    - `SUPABASE_URL` & `SUPABASE_KEY`: Database Credentials
 

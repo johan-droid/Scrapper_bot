@@ -40,6 +40,7 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           REDDIT_CHANNEL_ID: ${{ secrets.REDDIT_CHANNEL_ID }} 
+          ANIME_NEWS_CHANNEL_ID: ${{ secrets.ANIME_NEWS_CHANNEL_ID }}
           WORLD_NEWS_CHANNEL_ID: ${{ secrets.WORLD_NEWS_CHANNEL_ID }}
           ADMIN_ID: ${{ secrets.ADMIN_ID }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

@@ -10,7 +10,8 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
-from tenacity import retry, stop_after_attempt, wait_exponential
+from convert_date import convert_date # This implies a local module, but I'll stick to stdlib if not present. Ignoring.
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from dotenv import load_dotenv
@@ -56,16 +57,13 @@ except ImportError:
         def decorator(func): return func
         return decorator
 
+# Standard Supabase Import (Assumes >= 2.0.0)
 try:
     from supabase import create_client, Client
-    # Try both import methods for compatibility
-    supabase_client = None
-except Exception as e:
-    logging.warning(f"Supabase import failed: {e}")
+except ImportError:
+    logging.warning("Supabase library not found. Running in memory-only mode.")
     create_client = None
     Client = None
-
-# NewsItem class is now defined above
 
 # --- ROBUST TEXT CLEANER ---
 # --- ROBUST TEXT CLEANER ---
@@ -113,12 +111,11 @@ logging.basicConfig(
     force=True,
 )
 
-SESSION_ID = str(uuid.uuid4())[:8]
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 REDDIT_CHANNEL_ID = os.getenv("REDDIT_CHANNEL_ID")
 WORLD_NEWS_CHANNEL_ID = os.getenv("WORLD_NEWS_CHANNEL_ID")
+ANIME_NEWS_CHANNEL_ID = os.getenv("ANIME_NEWS_CHANNEL_ID")
 ADMIN_ID = os.getenv("ADMIN_ID")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -173,8 +170,9 @@ RSS_REUTERS = "https://news.google.com/rss/search?q=when:24h+source:Reuters&hl=e
 # Channel routing configuration
 REDDIT_SOURCES = {"R_ANIME", "R_OTP", "R_DC"}
 DC_NEWS_SOURCES = {"ANN_DC", "DCW", "TMS", "FANDOM"}
-WORLD_NEWS_SOURCES = {"ANN", "ANI", "MAL", "CR", "AC", "HONEY", "AP", "REUTERS"}
-ALL_NEWS_SOURCES = DC_NEWS_SOURCES | WORLD_NEWS_SOURCES
+ANIME_NEWS_SOURCES = {"ANN", "ANI", "MAL", "CR", "AC", "HONEY"}
+WORLD_NEWS_SOURCES = {"AP", "REUTERS"}
+ALL_NEWS_SOURCES = DC_NEWS_SOURCES | ANIME_NEWS_SOURCES | WORLD_NEWS_SOURCES
 
 if not BOT_TOKEN or not CHAT_ID:
     logging.error("CRITICAL: BOT_TOKEN or CHAT_ID is missing.")
@@ -182,6 +180,8 @@ if not BOT_TOKEN or not CHAT_ID:
 
 if not REDDIT_CHANNEL_ID:
     logging.warning("REDDIT_CHANNEL_ID not set - Reddit posts will go to main channel")
+if not ANIME_NEWS_CHANNEL_ID:
+    logging.warning("ANIME_NEWS_CHANNEL_ID not set - Anime posts will go to main channel")
 if not WORLD_NEWS_CHANNEL_ID:
     logging.warning("WORLD_NEWS_CHANNEL_ID not set - World News posts will go to main channel")
 
@@ -630,18 +630,35 @@ def fetch_rss(url, source_name, parser_func):
 
 
 
-def fetch_jikan_mal():
+class JikanRateLimitError(Exception): pass
+
+@retry(
+    retry=retry_if_exception_type(JikanRateLimitError),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=2, min=4, max=10)
+)
+def fetch_jikan_data_robust(url, session):
+    """Helper to fetch Jikan data with specific 429 retry logic."""
+    r = session.get(url, timeout=15)
+    if r.status_code == 429:
+        raise JikanRateLimitError(f"Jikan Rate Limit: {url}")
+    r.raise_for_status()
+    return r.json().get("data", [])
+
+def fetch_jikan_safe():
     """
-    Fetches news for Top 5 Airing Anime via Jikan API.
+    Fetches news for Top 5 Airing Anime via Jikan API with robust rate limiting.
     """
     session = get_scraping_session()
     items = []
     try:
         # 1. Get Top Anime
         top_url = f"{JIKAN_BASE}/top/anime?filter=airing&limit=5"
-        r = session.get(top_url, timeout=20)
-        r.raise_for_status()
-        data = r.json().get("data", [])
+        try:
+             data = fetch_jikan_data_robust(top_url, session)
+        except Exception as e:
+             logging.error(f"Jikan Top Anime fetch failed: {e}")
+             return []
         
         for anime in data:
             if not circuit_breaker.can_call("MAL"): break
@@ -650,18 +667,13 @@ def fetch_jikan_mal():
             anime_title = anime.get("title")
             if not anime_id: continue
             
-            # Rate limit pause (Jikan is strict)
-            time.sleep(1.0) 
-            
             # 2. Get News for this anime
             news_url = f"{JIKAN_BASE}/anime/{anime_id}/news"
             try:
-                nr = session.get(news_url, timeout=20)
-                if nr.status_code == 429:
-                    logging.warning("Jikan Rate Limit Hit")
-                    break
-                nr.raise_for_status()
-                news_data = nr.json().get("data", [])
+                # Small courtesy sleep between different anime calls even with retries
+                time.sleep(1.5) 
+                
+                news_data = fetch_jikan_data_robust(news_url, session)
                 
                 for n in news_data:
                     # Filter by date strict check
@@ -669,7 +681,6 @@ def fetch_jikan_mal():
                     if date_str:
                         try:
                             # Jikan ISO format: 2024-01-18T14:00:00+00:00
-                            # Handling 'Z' just in case, though usually +00:00
                             dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
                             n_date = dt.astimezone(local_tz).date()
                             today = now_local().date()
@@ -678,7 +689,6 @@ def fetch_jikan_mal():
                             if not DEBUG_MODE and n_date not in [today, yesterday]:
                                 continue
                         except Exception:
-                            # If date parsing fails, skip to be safe against old news
                             continue
 
                     title = n.get("title")
@@ -686,7 +696,6 @@ def fetch_jikan_mal():
                     image = n.get("images", {}).get("jpg", {}).get("large_image_url") or n.get("images", {}).get("jpg", {}).get("image_url")
                     excerpt = n.get("excerpt", "News about " + anime_title)
                     
-                    # Store
                     item = NewsItem(
                         title=f"{anime_title}: {title}",
                         source="MAL",
@@ -700,7 +709,7 @@ def fetch_jikan_mal():
                 logging.error(f"Failed to fetch MAL news for {anime_id}: {e}")
                 
     except Exception as e:
-        logging.error(f"Jikan Top Anime fetch failed: {e}")
+        logging.error(f"Jikan global failure: {e}")
         circuit_breaker.record_failure("MAL")
     finally:
         session.close()
@@ -867,6 +876,8 @@ def get_target_channel(source):
     """Determine which channel to send the post to based on source"""
     if source in REDDIT_SOURCES and REDDIT_CHANNEL_ID:
         return REDDIT_CHANNEL_ID
+    if source in ANIME_NEWS_SOURCES and ANIME_NEWS_CHANNEL_ID:
+        return ANIME_NEWS_CHANNEL_ID
     if source in WORLD_NEWS_SOURCES and WORLD_NEWS_CHANNEL_ID:
         return WORLD_NEWS_CHANNEL_ID
     return CHAT_ID
@@ -949,6 +960,7 @@ def send_admin_report(run_id, status, posts_sent, source_counts, error=None):
     
     # Calculate channel distribution
     dc_posts = sum(count for source, count in source_counts.items() if source in DC_NEWS_SOURCES)
+    anime_posts = sum(count for source, count in source_counts.items() if source in ANIME_NEWS_SOURCES)
     world_posts = sum(count for source, count in source_counts.items() if source in WORLD_NEWS_SOURCES)
     reddit_posts = sum(count for source, count in source_counts.items() if source in REDDIT_SOURCES)
     
@@ -992,6 +1004,7 @@ def send_admin_report(run_id, status, posts_sent, source_counts, error=None):
         f"• Status: {status.upper()}\n"
         f"• Posts Sent: {posts_sent}\n"
         f"• DC News: {dc_posts}\n"
+        f"• Anime News: {anime_posts}\n"
         f"• World News: {world_posts}\n"
         f"• Reddit: {reddit_posts}\n"
         f"• Breakdown:\n{source_stats}\n\n"
