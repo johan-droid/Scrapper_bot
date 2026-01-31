@@ -87,6 +87,7 @@ SESSION_ID = str(uuid.uuid4())[:8]
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 REDDIT_CHANNEL_ID = os.getenv("REDDIT_CHANNEL_ID")
+WORLD_NEWS_CHANNEL_ID = os.getenv("WORLD_NEWS_CHANNEL_ID")
 ADMIN_ID = os.getenv("ADMIN_ID")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -134,7 +135,9 @@ JIKAN_BASE = "https://api.jikan.moe/v4"
 
 # Channel routing configuration
 REDDIT_SOURCES = {"R_ANIME", "R_OTP", "R_DC"}
-NEWS_SOURCES = {"ANN", "ANN_DC", "DCW", "TMS", "FANDOM", "ANI", "MAL", "CR", "AC", "HONEY"}
+DC_NEWS_SOURCES = {"ANN_DC", "DCW", "TMS", "FANDOM"}
+WORLD_NEWS_SOURCES = {"ANN", "ANI", "MAL", "CR", "AC", "HONEY"}
+ALL_NEWS_SOURCES = DC_NEWS_SOURCES | WORLD_NEWS_SOURCES
 
 if not BOT_TOKEN or not CHAT_ID:
     logging.error("CRITICAL: BOT_TOKEN or CHAT_ID is missing.")
@@ -142,6 +145,8 @@ if not BOT_TOKEN or not CHAT_ID:
 
 if not REDDIT_CHANNEL_ID:
     logging.warning("REDDIT_CHANNEL_ID not set - Reddit posts will go to main channel")
+if not WORLD_NEWS_CHANNEL_ID:
+    logging.warning("WORLD_NEWS_CHANNEL_ID not set - World News posts will go to main channel")
 
 utc_tz = pytz.utc
 local_tz = pytz.timezone("Asia/Kolkata")
@@ -848,6 +853,8 @@ def get_target_channel(source):
     """Determine which channel to send the post to based on source"""
     if source in REDDIT_SOURCES and REDDIT_CHANNEL_ID:
         return REDDIT_CHANNEL_ID
+    if source in WORLD_NEWS_SOURCES and WORLD_NEWS_CHANNEL_ID:
+        return WORLD_NEWS_CHANNEL_ID
     return CHAT_ID
 
 def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
@@ -886,7 +893,10 @@ def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
             return False
         
         # Log which channel we're sending to
-        channel_type = "Reddit" if item.source in REDDIT_SOURCES else "News"
+        channel_type = "Main/DC"
+        if item.source in REDDIT_SOURCES: channel_type = "Reddit"
+        elif item.source in WORLD_NEWS_SOURCES: channel_type = "World"
+        
         logging.info(f"Sending {channel_type} post to channel {target_chat_id}: {title[:50]}...")
 
         # Prepare payload with proper JSON structure
@@ -955,7 +965,8 @@ def send_admin_report(run_id, status, posts_sent, source_counts, error=None):
     slot = slot_index(dt)
     
     # Calculate channel distribution
-    news_posts = sum(count for source, count in source_counts.items() if source in NEWS_SOURCES)
+    dc_posts = sum(count for source, count in source_counts.items() if source in DC_NEWS_SOURCES)
+    world_posts = sum(count for source, count in source_counts.items() if source in WORLD_NEWS_SOURCES)
     reddit_posts = sum(count for source, count in source_counts.items() if source in REDDIT_SOURCES)
     
     # Fetch Daily Total
@@ -997,8 +1008,9 @@ def send_admin_report(run_id, status, posts_sent, source_counts, error=None):
         f"<b>📊 Present Cycle</b>\n"
         f"• Status: {status.upper()}\n"
         f"• Posts Sent: {posts_sent}\n"
-        f"• News Channel: {news_posts}\n"
-        f"• Reddit Channel: {reddit_posts}\n"
+        f"• DC News: {dc_posts}\n"
+        f"• World News: {world_posts}\n"
+        f"• Reddit: {reddit_posts}\n"
         f"• Breakdown:\n{source_stats}\n\n"
         
         f"<b>📈 Statistics</b>\n"
