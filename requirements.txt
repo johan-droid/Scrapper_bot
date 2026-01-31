@@ -2,7 +2,7 @@ requests==2.31.0
 beautifulsoup4==4.12.2
 tenacity==8.2.3
 pytz
-supabase==2.8.1
+supabase>=2.27.0
 Flask>=3.0.0
 python-dotenv
 pydantic
@@ -10,4 +10,3 @@ lxml
 feedparser==6.0.10
 schedule==1.2.0
 Pillow==10.1.0
-python-telegram-bot==20.7
