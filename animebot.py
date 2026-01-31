@@ -238,13 +238,23 @@ def decode_google_news_url(source_url):
     """
     try:
         if "news.google.com" in source_url:
-            # Google often changes encoding. For now, returning standard URL 
-            # often redirects correctly in browser, but cleaner to have direct if possible.
-            # Base64 decoding strategy is fragile; relying on the redirect is safer for the bot's 'click'
-            # but for 'article_url', let's trust Telegram to follow redirects or just keep it as is.
-            # *Update*: User requested base64 extraction logic, but simplified.
-            pass 
+            # Resolve the redirect to get the actual clean URL
+            # We use a session with a proper User-Agent to ensure Google responds correctly
+            with requests.Session() as s:
+                s.headers.update({
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+                })
+                # Check headers only first (Head) or minimal content
+                r = s.head(source_url, allow_redirects=True, timeout=5)
+                if r.status_code == 200:
+                    return r.url
+                # If HEAD fails (sometimes disallowed), try GET with stream
+                r = s.get(source_url, allow_redirects=True, timeout=5, stream=True)
+                if r.status_code == 200:
+                    return r.url
     except Exception:
+        # If resolution fails (timeout, error), return original. 
+        # Telegram client usually handles the redirect fine anyway.
         pass
     return source_url
 
