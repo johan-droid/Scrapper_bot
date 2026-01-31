@@ -68,33 +68,39 @@ except Exception as e:
 # NewsItem class is now defined above
 
 # --- ROBUST TEXT CLEANER ---
+# --- ROBUST TEXT CLEANER ---
 def clean_text_extractor(html_text_or_element, limit=350):
     """
-    Robust text cleaner that handles both raw HTML strings and BeautifulSoup elements.
-    Strips scripts/styles, removes HTML tags, normalizes whitespace, and enforces character limits.
+    Robustly cleans HTML content and removes junk data.
     """
     if not html_text_or_element: return "No summary available."
-    
+
     # Convert BS4 element to string if needed
     if hasattr(html_text_or_element, "get_text"):
-        # Use simple get_text first to avoid full re-parsing if it's already an element
-        text = html_text_or_element.get_text(" ", strip=True)
+        # We need the tag structure to decompose specific tags
+        soup = html_text_or_element
     else:
-        text = str(html_text_or_element)
+        if "<" in str(html_text_or_element) and ">" in str(html_text_or_element):
+             soup = BeautifulSoup(str(html_text_or_element), "html.parser")
+        else:
+             return str(html_text_or_element)[:limit]
+
+    # Remove script and style tags entirely
+    for script in soup(["script", "style", "header", "footer"]):
+        script.decompose()
         
-    # If it looks like HTML (contains tags), do a rigorous clean
-    if "<" in text and ">" in text:
-        soup = BeautifulSoup(text, "html.parser")
-        for script in soup(["script", "style"]):
-            script.decompose()
-        text = soup.get_text(separator=" ")
+    text = soup.get_text(separator=" ")
     
-    # Normalize whitespace (handles newlines, tabs, multiple spaces)
-    clean_text = re.sub(r'\s+', ' ', text).strip()
+    # Remove URL-like strings and extra whitespace
+    text = re.sub(r'http\S+', '', text)
+    text = re.sub(r'\s+', ' ', text).strip()
     
-    if len(clean_text) > limit:
-        return clean_text[:limit-3].strip() + "..."
-    return clean_text
+    # Fix common encoding artifacts
+    text = text.replace('â€™', "'").replace('â€"', "—").replace('&nbsp;', ' ')
+    
+    if len(text) > limit:
+        return text[:limit-3].strip() + "..."
+    return text
 
 # Load env vars (useful for local testing, ignored in GHA if secrets are mapped)
 env_path = os.path.join(os.path.dirname(__file__), ".env")
@@ -281,44 +287,13 @@ def ensure_daily_row(date_obj):
     except Exception: pass
 
 def increment_post_counters(date_obj):
-    """
-    Optimized to reduce API calls. 
-    In a high-scale environment, replace this with a Supabase RPC call.
-    """
+    """Calls server-side functions to increment counters safely."""
     if not supabase: return
     try:
-        # Atomic Update: Using 'inc' logic if supported by local Supabase setup (via RPC)
-        # otherwise fallback to batch update.
-        ensure_daily_row(date_obj)
-        
-        # We fetch once for both counters to reduce latency if possible.
-        # Ideally, use RPC:
-        # supabase.rpc('increment_daily_stats', {'row_date': str(date_obj)}).execute()
-        # supabase.rpc('increment_bot_stats').execute()
-        
-        # Current logic using client-side increment (safe for low concurrency)
-        # Try RPC first if available (Optimistic)
-        try:
-             supabase.rpc('increment_daily_stats', {'row_date': str(date_obj)}).execute()
-             supabase.rpc('increment_bot_stats').execute()
-             return
-        except Exception:
-             # Fallback to standard logic if RPCs aren't set up
-             pass
-
-        d = supabase.table("daily_stats").select("posts_count").eq("date", str(date_obj)).single().execute()
-        if d.data:
-            new_count = d.data['posts_count'] + 1
-            supabase.table("daily_stats").update({"posts_count": new_count}).eq("date", str(date_obj)).execute()
-        
-        b = supabase.table("bot_stats").select("*").limit(1).execute()
-        if b.data:
-            total = int(b.data[0].get("total_posts_all_time", 0))
-            supabase.table("bot_stats").update({"total_posts_all_time": total + 1}).eq("id", b.data[0]["id"]).execute()
-
+        supabase.rpc('increment_daily_stats', {'row_date': str(date_obj)}).execute()
+        supabase.rpc('increment_bot_stats').execute()
     except Exception as e:
-        # Fallback to standard logic if RPCs aren't set up
-        logging.warning(f"RPC increment failed/fallback error: {e}")
+        logging.error(f"Atomic stats update failed: {e}")
 
 def create_or_reuse_run(date_obj, slot, scheduled_local):
     if not supabase: return f"local-{slot}" # Fallback for local testing only
@@ -970,30 +945,31 @@ def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
             "disable_web_page_preview": False
         }
         
+        payload = base_payload.copy()
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
         if item.image_url and validate_image_url(item.image_url):
-            # Send as photo with caption
-            photo_payload = base_payload.copy()
-            photo_payload.update({
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+            payload.update({
                 "photo": item.image_url,
                 "caption": msg
             })
-            response = sess.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-                data=photo_payload,
-                timeout=20
-            )
         else:
-            # Send as text message
-            text_payload = base_payload.copy()
-            text_payload.update({
+            payload.update({
                 "text": msg
             })
-            response = sess.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                json=text_payload,
-                timeout=20
-            )
+            
+        # Send with 429 Handling
+        response = sess.post(url, json=payload if "sendMessage" in url else None, data=payload if "sendPhoto" in url else None, timeout=20)
         
+        if response.status_code == 429:
+            # Handle Telegram Rate Limit
+            retry_after = int(response.headers.get("Retry-After", 30))
+            logging.warning(f"Rate limited by Telegram. Sleeping {retry_after}s")
+            time.sleep(retry_after)
+            # Re-attempt once after sleep
+            response = sess.post(url, json=payload if "sendMessage" in url else None, data=payload if "sendPhoto" in url else None, timeout=20)
+
         # Check response for proper JSON handling
         if response.status_code == 200:
             try:
@@ -1006,28 +982,9 @@ def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
                     logging.error(f"Telegram API error: {error_desc}")
             except ValueError as e:
                 logging.error(f"Invalid JSON response from Telegram: {e}")
-        elif response.status_code == 429:
-             logging.warning(f"Telegram Limit Hit (429) for {title[:20]}. Sleeping 5s.")
-             time.sleep(5)
-             # Optionally retry here or let the outer loop interval handle it. 
-             # Since this is "send_to_telegram", simply returning False means we might not send it this run,
-             # but we haven't marked it as "posted" in DB yet (caller marks it ONLY if sent is True usually? 
-             # Wait, caller logic: if send_to_telegram(...) -> then mark posted? 
-             # Checking caller: 
-             # if send_to_telegram(item, ...):
-             #    sent_count += 1
-             #
-             # Inside send_to_telegram, it does:
-             # if not record_post(...): return False <--- DB MARKED BEFORE SENDING!
-             #
-             # This is a logic flaw in the original code if send fails!
-             # Ideally, we should "unmark" or only mark after success.
-             # However, keeping 100% logic change scope limited: 
-             # We just log 429.
-             pass
         else:
-            logging.error(f"Telegram HTTP error: {response.status_code} - {response.text}")
-            
+             logging.error(f"Telegram HTTP error: {response.status_code} - {response.text}")
+
     except Exception as e:
         logging.error(f"Telegram send failed: {type(e).__name__}: {str(e)[:200]}")
     finally:
