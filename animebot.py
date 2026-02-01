@@ -66,8 +66,7 @@ except ImportError:
     create_client = None
     Client = None
 
-# --- ROBUST TEXT CLEANER ---
-# --- ROBUST TEXT CLEANER ---
+
 def clean_text_extractor(html_text_or_element, limit=350):
     """
     Robustly cleans HTML content and removes junk data.
@@ -117,13 +116,12 @@ logging.basicConfig(
 SESSION_ID = str(uuid.uuid4())[:8]
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-# REDDIT_CHANNEL_ID removed
 WORLD_NEWS_CHANNEL_ID = os.getenv("WORLD_NEWS_CHANNEL_ID")
 ANIME_NEWS_CHANNEL_ID = os.getenv("ANIME_NEWS_CHANNEL_ID")
 ADMIN_ID = os.getenv("ADMIN_ID")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
 # Circuit breaker (In-memory for single run duration)
 class SourceCircuitBreaker:
     def __init__(self, failure_threshold=3, recovery_timeout=300):
@@ -817,10 +815,6 @@ def parse_reuters_google_rss(soup):
         # 1. Clean Title (Google News adds "- SourceName" at the end)
         if " - " in item.title:
             item.title = item.title.rsplit(" - ", 1)[0]
-
-        # 2. Decode URL
-        # We try to keep it simple. If we can't decode, the user will just follow the google link.
-        pass
             
     return items
 
@@ -1304,24 +1298,11 @@ def run_once():
         ann_dc_items = fetch_generic(BASE_URL_ANN_DC, "ANN_DC", parse_ann_dc)
         all_items.extend(ann_dc_items)
 
-    # Anime News India
-    if circuit_breaker.can_call("ANI"):
-        ani_items = fetch_rss(RSS_ANI, "ANI", lambda s: parse_rss_robust(s, "ANI"))
-        all_items.extend(ani_items)
 
-    # Reddit Scrapers (RSS) - Removed due to user request
-    # r/anime, r/OTP, r/DC logic deleted
 
-    # Crunchyroll
-    if circuit_breaker.can_call("CR"):
-        cr_items = fetch_rss(RSS_CRUNCHYROLL, "CR", lambda s: parse_rss_robust(s, "CR"))
-        all_items.extend(cr_items)
 
     # Anime Corner
-    if circuit_breaker.can_call("AC"):
-        # Use generic loop if possible, provided we mapped it in RSS_FEEDS
-        # But we can keep explicit if we want.
-        pass
+
 
     # GENERIC RSS FETCHING LOOP (Replaces individual calls)
     for code, url in RSS_FEEDS.items():
