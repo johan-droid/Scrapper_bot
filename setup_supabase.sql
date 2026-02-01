@@ -72,6 +72,10 @@ CREATE OR REPLACE FUNCTION increment_bot_stats()
 RETURNS VOID AS $$
 BEGIN
     UPDATE bot_stats
-    SET total_posts_all_time = total_posts_all_time + 1;
+    SET total_posts_all_time = total_posts_all_time + 1
+    WHERE id = (SELECT id FROM bot_stats LIMIT 1);
 END;
 $$ LANGUAGE plpgsql;
+-- 7. Clean Reddit Spam / History
+-- Run this once to remove all old Reddit posts from the tracking table
+-- DELETE FROM posted_news WHERE source IN ('R_ANIME', 'R_OTP', 'R_DC');
