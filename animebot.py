@@ -118,7 +118,7 @@ SESSION_ID = str(uuid.uuid4())[:8]
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-REDDIT_CHANNEL_ID = os.getenv("REDDIT_CHANNEL_ID")
+# REDDIT_CHANNEL_ID removed
 WORLD_NEWS_CHANNEL_ID = os.getenv("WORLD_NEWS_CHANNEL_ID")
 ANIME_NEWS_CHANNEL_ID = os.getenv("ANIME_NEWS_CHANNEL_ID")
 ADMIN_ID = os.getenv("ADMIN_ID")
@@ -150,8 +150,8 @@ DEBUG_MODE = False
 SOURCE_LABEL = {
     "ANN": "Anime News Network", "ANN_DC": "ANN (Detective Conan)",
     "DCW": "Detective Conan Wiki", "TMS": "TMS Entertainment", "FANDOM": "Fandom Wiki",
-    "ANI": "Anime News India", "R_ANIME": "Reddit (r/anime)",
-    "R_OTP": "Reddit (r/OneTruthPrevails)", "R_DC": "Reddit (r/DetectiveConan)",
+    "ANI": "Anime News India",
+    # Reddit sources removed
     "MAL": "MyAnimeList (Jikan)", "CR": "Crunchyroll News",
     "AC": "Anime Corner", "HONEY": "Honey's Anime",
     "AP": "AP News (Entertainment)",
@@ -160,9 +160,7 @@ SOURCE_LABEL = {
 
 # RSS Feeds
 RSS_ANI = "https://animenewsindia.com/feed/"
-RSS_R_ANIME = "https://www.reddit.com/r/anime/new/.rss"
-RSS_R_OTP = "https://www.reddit.com/r/OneTruthPrevails/new/.rss"
-RSS_R_DC = "https://www.reddit.com/r/DetectiveConan/new/.rss"
+# Reddit RSS Constants removed
 RSS_CRUNCHYROLL = "https://cr-news-api-service.prd.crunchyrollsvc.com/v1/en-US/rss"
 RSS_ANIME_CORNER = "https://animecorner.me/feed/"
 RSS_HONEYS = "https://honeysanime.com/feed/"
@@ -173,7 +171,7 @@ BASE_URL_AP_NEWS = "https://apnews.com/hub/entertainment" # Targeting entertainm
 RSS_REUTERS = "https://news.google.com/rss/search?q=when:24h+source:Reuters&hl=en-US&gl=US&ceid=US:en"
 
 # Channel routing configuration
-REDDIT_SOURCES = {"R_ANIME", "R_OTP", "R_DC"}
+# REDDIT_SOURCES set removed
 DC_NEWS_SOURCES = {"ANN_DC", "DCW", "TMS", "FANDOM"}
 ANIME_NEWS_SOURCES = {"ANN", "ANI", "MAL", "CR", "AC", "HONEY"}
 WORLD_NEWS_SOURCES = {"AP", "REUTERS"}
@@ -189,8 +187,7 @@ if not CHAT_ID:
     if not ANIME_NEWS_CHANNEL_ID:
          logging.warning("WARNING: Neither CHAT_ID nor ANIME_NEWS_CHANNEL_ID is set!")
 
-if not REDDIT_CHANNEL_ID:
-    logging.warning("REDDIT_CHANNEL_ID not set - Reddit posts will go to main channel")
+# REDDIT_CHANNEL_ID check removed
 if not ANIME_NEWS_CHANNEL_ID:
     logging.warning("ANIME_NEWS_CHANNEL_ID not set - Anime posts will go to main channel")
 if not WORLD_NEWS_CHANNEL_ID:
@@ -331,13 +328,27 @@ def ensure_daily_row(date_obj):
     except Exception: pass
 
 def increment_post_counters(date_obj):
-    """Calls server-side functions to increment counters safely."""
+    """Client-side atomic increment to avoid RPC 'WHERE clause' error."""
     if not supabase: return
     try:
-        supabase.rpc('increment_daily_stats', {'row_date': str(date_obj)}).execute()
-        supabase.rpc('increment_bot_stats').execute()
+        # 1. Update Daily Stats
+        # First ensure row exists (done by ensure_daily_row previously, but good to double check or just upsert)
+        # Using a raw query or simple read-update loop given Supabase-py limits
+        r = supabase.table("daily_stats").select("posts_count").eq("date", str(date_obj)).single().execute()
+        if r.data:
+            new_count = r.data['posts_count'] + 1
+            supabase.table("daily_stats").update({"posts_count": new_count}).eq("date", str(date_obj)).execute()
+        else:
+             supabase.table("daily_stats").insert({"date": str(date_obj), "posts_count": 1}).execute()
+
+        # 2. Update Bot Stats (Global)
+        r_bot = supabase.table("bot_stats").select("*").limit(1).execute()
+        if r_bot.data:
+            row_id = r_bot.data[0]['id']
+            curr_total = r_bot.data[0]['total_posts_all_time']
+            supabase.table("bot_stats").update({"total_posts_all_time": curr_total + 1}).eq("id", row_id).execute()
     except Exception as e:
-        logging.error(f"Atomic stats update failed: {e}")
+        logging.error(f"Stats update failed: {e}")
 
 def create_or_reuse_run(date_obj, slot, scheduled_local):
     if not supabase: return f"local-{slot}" # Fallback for local testing only
@@ -631,9 +642,7 @@ def fetch_rss(url, source_name, parser_func):
     """
     session = get_scraping_session()
     try:
-        # Reddit requires a unique User-Agent to avoid 429s even on RSS
-        if "reddit.com" in url:
-            session.headers.update({"User-Agent": "Mozilla/5.0 (compatible; ScrapperBot/2.0; +http://github.com/johan-droid)"})
+        # Reddit special user-agent check removed
             
         r = session.get(url, timeout=25)
         r.raise_for_status()
@@ -833,9 +842,7 @@ def format_message(item: NewsItem):
         "AC": { "emoji": "🏯", "tag": "ANIME CORNER", "color": "🔴", "source_name": "Anime Corner", "channel_tag": "@Detective_Conan_News" },
         "HONEY": { "emoji": "🍯", "tag": "HONEY'S ANIME", "color": "🟡", "source_name": "Honey's Anime", "channel_tag": "@Detective_Conan_News" },
         "ANI": { "emoji": "🇮🇳", "tag": "ANIME INDIA", "color": "🟠", "source_name": "Anime News India", "channel_tag": "@Detective_Conan_News" },
-        "R_ANIME": { "emoji": "💬", "tag": "REDDIT DISCUSSION", "color": "⚪", "source_name": "r/anime", "channel_tag": "@Redditposting_DCN" },
-        "R_OTP": { "emoji": "🕵️", "tag": "REDDIT CONAN", "color": "🔵", "source_name": "r/OneTruthPrevails", "channel_tag": "@Redditposting_DCN" },
-        "R_DC": { "emoji": "🕵️", "tag": "REDDIT CONAN", "color": "🔵", "source_name": "r/DetectiveConan", "channel_tag": "@Redditposting_DCN" },
+        # Reddit sources removed
         # Added explicit configs for World News to remove channel tag
         "AP": { "emoji": "🌍", "tag": "WORLD NEWS", "color": "🔵", "source_name": "AP News", "channel_tag": None },
         "REUTERS": { "emoji": "🗺️", "tag": "WORLD NEWS", "color": "🟠", "source_name": "Reuters", "channel_tag": None },
@@ -903,12 +910,11 @@ def format_message(item: NewsItem):
 
 def get_target_channel(source):
     """Determine which channel to send the post to based on source"""
-    if source in REDDIT_SOURCES and REDDIT_CHANNEL_ID:
-        return REDDIT_CHANNEL_ID
-    if source in ANIME_NEWS_SOURCES and ANIME_NEWS_CHANNEL_ID:
-        return ANIME_NEWS_CHANNEL_ID
     if source in WORLD_NEWS_SOURCES and WORLD_NEWS_CHANNEL_ID:
         return WORLD_NEWS_CHANNEL_ID
+    if source in ANIME_NEWS_SOURCES and ANIME_NEWS_CHANNEL_ID:
+         return ANIME_NEWS_CHANNEL_ID
+    # Fallback to main chat ID for everything else
     return CHAT_ID or ANIME_NEWS_CHANNEL_ID
 
 def send_to_telegram(item: NewsItem, run_id, slot, posted_set):
@@ -991,7 +997,7 @@ def send_admin_report(run_id, status, posts_sent, source_counts, error=None):
     dc_posts = sum(count for source, count in source_counts.items() if source in DC_NEWS_SOURCES)
     anime_posts = sum(count for source, count in source_counts.items() if source in ANIME_NEWS_SOURCES)
     world_posts = sum(count for source, count in source_counts.items() if source in WORLD_NEWS_SOURCES)
-    reddit_posts = sum(count for source, count in source_counts.items() if source in REDDIT_SOURCES)
+    # Reddit posts removed
     
     # Fetch Daily Total
     daily_total = 0
@@ -1035,7 +1041,6 @@ def send_admin_report(run_id, status, posts_sent, source_counts, error=None):
         f"• DC News: {dc_posts}\n"
         f"• Anime News: {anime_posts}\n"
         f"• World News: {world_posts}\n"
-        f"• Reddit: {reddit_posts}\n"
         f"• Breakdown:\n{source_stats}\n\n"
         
         f"<b>📈 Statistics</b>\n"
@@ -1092,21 +1097,8 @@ def run_once():
         ani_items = fetch_rss(RSS_ANI, "ANI", lambda s: parse_rss_robust(s, "ANI"))
         all_items.extend(ani_items)
 
-    # Reddit Scrapers (RSS) - Unified
-    # r/anime
-    if circuit_breaker.can_call("R_ANIME"):
-        r_anime = fetch_rss(RSS_R_ANIME, "R_ANIME", lambda s: parse_rss_robust(s, "R_ANIME"))
-        all_items.extend(r_anime)
-        
-    # r/OneTruthPrevails
-    if circuit_breaker.can_call("R_OTP"):
-        r_otp = fetch_rss(RSS_R_OTP, "R_OTP", lambda s: parse_rss_robust(s, "R_OTP"))
-        all_items.extend(r_otp)
-        
-    # r/DetectiveConan
-    if circuit_breaker.can_call("R_DC"):
-        r_dc = fetch_rss(RSS_R_DC, "R_DC", lambda s: parse_rss_robust(s, "R_DC"))
-        all_items.extend(r_dc)
+    # Reddit Scrapers (RSS) - Removed due to user request
+    # r/anime, r/OTP, r/DC logic deleted
 
     # Crunchyroll
     if circuit_breaker.can_call("CR"):
