@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import html
 import time
 import uuid
 import pytz
@@ -78,13 +79,15 @@ def clean_text_extractor(html_text_or_element, limit=350):
         # We need the tag structure to decompose specific tags
         soup = html_text_or_element
     else:
-        if "<" in str(html_text_or_element) and ">" in str(html_text_or_element):
-             soup = BeautifulSoup(str(html_text_or_element), "html.parser")
+        # Check if it looks like HTML, otherwise just return text
+        raw_str = str(html_text_or_element)
+        if "<" in raw_str and ">" in raw_str:
+             soup = BeautifulSoup(raw_str, "html.parser")
         else:
-             return str(html_text_or_element)[:limit]
+             return raw_str[:limit]
 
     # Remove script and style tags entirely
-    for script in soup(["script", "style", "header", "footer"]):
+    for script in soup(["script", "style", "header", "footer", "a"]): # Remove links from summary entirely
         script.decompose()
         
     text = soup.get_text(separator=" ")
@@ -603,10 +606,23 @@ def parse_reuters_google_rss(soup):
     items = parse_rss_robust(soup, "REUTERS")
     # Post-process to decode URLs or fetch better images
     for item in items:
+        # 1. Clean Title (Google News adds "- SourceName" at the end)
+        if " - " in item.title:
+            item.title = item.title.rsplit(" - ", 1)[0]
+
+        # 2. Decode URL
         # Google News RSS usually doesn't have images in enclosure.
         # We need to fetch the article to get the image.
-        # Since we do concurrent enrichment later, ensuring 'article_url' is correct is key.
-        item.article_url = decode_google_news_url(item.article_url)
+        original_url = item.article_url
+        decoded_url = decode_google_news_url(original_url)
+        item.article_url = decoded_url
+        
+        # 3. Mark for image skip if resolution failed
+        # If we couldn't resolve the google news link, we shouldn't try to scrape it 
+        # because we'll just get the Google News ID page with the generic logo.
+        if "news.google.com" in decoded_url:
+            item.image_url = None # Explicitly clear it so concurrent fetch doesn't overwrite with bad OG data
+            
     return items
 
 def fetch_rss(url, source_name, parser_func):
@@ -727,6 +743,11 @@ def fetch_jikan_safe():
 def fetch_details_concurrently(items):
     def get_details(item: NewsItem):
         if not item.article_url: return item
+        
+        # Verify URL is scrapable (skip Google News redirect pages to avoid wrong image)
+        if "news.google.com" in item.article_url:
+             return item
+
         session = get_scraping_session()
         try:
             r = session.get(item.article_url, timeout=15)
@@ -815,6 +836,9 @@ def format_message(item: NewsItem):
         "R_ANIME": { "emoji": "💬", "tag": "REDDIT DISCUSSION", "color": "⚪", "source_name": "r/anime", "channel_tag": "@Redditposting_DCN" },
         "R_OTP": { "emoji": "🕵️", "tag": "REDDIT CONAN", "color": "🔵", "source_name": "r/OneTruthPrevails", "channel_tag": "@Redditposting_DCN" },
         "R_DC": { "emoji": "🕵️", "tag": "REDDIT CONAN", "color": "🔵", "source_name": "r/DetectiveConan", "channel_tag": "@Redditposting_DCN" },
+        # Added explicit configs for World News to remove channel tag
+        "AP": { "emoji": "🌍", "tag": "WORLD NEWS", "color": "🔵", "source_name": "AP News", "channel_tag": None },
+        "REUTERS": { "emoji": "🗺️", "tag": "WORLD NEWS", "color": "🟠", "source_name": "Reuters", "channel_tag": None },
     }
     
     # Tag Configs (The "JSON" features requested)
@@ -841,7 +865,6 @@ def format_message(item: NewsItem):
     })
 
     # Apply Smart Tagging
-    # Note: Logic moved to get_smart_tag_key for cleanliness
     tag_key = get_smart_tag_key(item)
     if tag_key and tag_key in tag_configs:
         tc = tag_configs[tag_key]
@@ -849,36 +872,34 @@ def format_message(item: NewsItem):
         config["tag"] = tc["tag"]
         config["color"] = tc["color"]
     
-    # Safe text processing with proper escaping
-    title = escape_html(str(item.title)) if item.title else "No Title"
-    summary = escape_html(str(item.summary_text)) if item.summary_text else "No summary available"
-    link = str(item.article_url) if item.article_url else ""
+    # Safe text processing with proper escaping using html library
+    # quote=False for content text (allows quotes to be visible)
+    title = html.escape(str(item.title or "No Title"), quote=False)
+    summary = html.escape(str(item.summary_text or "No summary available"), quote=False)
+    link = str(item.article_url or "")
     
     # Build message components safely
     components = [
         f"{config['emoji']} <b>{config['tag']}</b> {config['color']}",
         f"<b>{title}</b>",
         f"<i>{summary}</i>",
-        f"📊 <b>Source:</b> {config['source_name']}",
-        f"📢 <b>Channel:</b> {config['channel_tag']}"
+        f"📊 <b>Source:</b> {config['source_name']}"
     ]
+    
+    # Conditionally add channel line
+    if config.get('channel_tag'):
+        components.append(f"📢 <b>Channel:</b> {config['channel_tag']}")
     
     # Add link only if valid
     if link and link.startswith('http'):
-        components.append(f"🔗 <a href='{link}'>Read Full Article</a>")
+        # quote=True is CRITICAL here for href attributes to escape ' and "
+        safe_link = html.escape(link, quote=True)
+        components.append(f"🔗 <a href='{safe_link}'>Read Full Article</a>")
     
     # Join with proper spacing and JSON-safe formatting
     msg = "\n\n".join(components)
     
-    # Final validation to prevent broken JSON
-    try:
-        # Test if message can be properly encoded
-        msg.encode('utf-8')
-        return msg
-    except Exception as e:
-        logging.error(f"Message encoding failed: {e}")
-        # Fallback to simple message
-        return f"<b>{title}</b>\n\n{summary}\n\n📊 Source: {config['source_name']}"
+    return msg
 
 def get_target_channel(source):
     """Determine which channel to send the post to based on source"""
@@ -991,7 +1012,7 @@ def send_admin_report(run_id, status, posts_sent, source_counts, error=None):
     # Check Health / Circuit Breaker
     health_warnings = []
     if error:
-        health_warnings.append(f"⚠️ <b>Critical Error:</b> {str(error)[:100]}")
+        health_warnings.append(f"⚠️ <b>Critical Error:</b> {html.escape(str(error)[:100], quote=False)}")
     
     for source, count in circuit_breaker.failure_counts.items():
         if count >= circuit_breaker.failure_threshold:

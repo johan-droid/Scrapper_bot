@@ -21,6 +21,7 @@ from urllib.parse import urljoin, urlparse
 import io
 from PIL import Image
 import hashlib
+import html
 
 # Load environment variables
 load_dotenv()
@@ -103,17 +104,10 @@ class WorldNewsScraper:
         }
         
         self.disclaimer = """
-🌍 **WORLD NEWS DISCLAIMER** 🌍
+🌍 <b>WORLD NEWS DISCLAIMER</b> 🌍
 We don't own any news rights. All content belongs to respective sources.
 This bot aggregates world news for informational purposes only.
 Please visit the original sources for full articles and images.
-
-🤖 **Bot Features:**
-• 🌍 World News (10 premium sources) - This channel
-• 📰 General News (8 sources) - Main channel
-• 🎬 Entertainment (13 sources) - Reddit channel
-• 🖼️ High-quality image extraction
-• ⚖️ Proper source attribution
         """
         
         # Telegram configuration
@@ -382,7 +376,7 @@ Please visit the original sources for full articles and images.
                 data = {
                     'chat_id': self.world_news_channel_id,
                     'text': msg,
-                    'parse_mode': 'Markdown',
+                    'parse_mode': 'HTML',
                     'disable_web_page_preview': False if image_data else True
                 }
                 
@@ -417,7 +411,7 @@ Please visit the original sources for full articles and images.
             data = {
                 'chat_id': self.world_news_channel_id,
                 'caption': caption[:1024],  # Telegram caption limit
-                'parse_mode': 'Markdown'
+                'parse_mode': 'HTML'
             }
             
             response = requests.post(url, files=files, data=data, timeout=30)
@@ -436,16 +430,26 @@ Please visit the original sources for full articles and images.
 
     def format_world_article(self, article: Dict[str, Any]) -> str:
         """Format world news article with proper attribution"""
+        
+        # Escape content for HTML
+        title = html.escape(article.get('title', 'No Title'), quote=False)
+        description = html.escape(article.get('description', ''), quote=False)
+        link = html.escape(article.get('link', ''), quote=True)
+        source = html.escape(article.get('source', 'Unknown'), quote=False)
+        country = html.escape(article.get('country', ''), quote=False)
+        source_desc = html.escape(article.get('source_description', ''), quote=False)
+        published = html.escape(article.get('published', ''), quote=False)
+        
         formatted = f"""
-🌍 **{article['title']}**
+🌍 <b>{title}</b>
 
-{article['description']}
+{description}
 
-📖 [Read Full Article]({article['link']})
+📖 <a href="{link}">Read Full Article</a>
 
-📍 **Source:** {article['source']} ({article['country']})
-💡 **About:** {article['source_description']}
-🕒 **Published:** {article['published']}
+📍 <b>Source:</b> {source} ({country})
+💡 <b>About:</b> {source_desc}
+🕒 <b>Published:</b> {published}
 
 {self.disclaimer}
         """
