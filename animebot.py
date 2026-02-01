@@ -210,10 +210,11 @@ if not BOT_TOKEN:
     raise SystemExit(1)
 
 if not CHAT_ID:
-    logging.warning("CHAT_ID is missing. Default channel fallbacks must be set.")
-    # If using specific channels, this might be intentional.
-    if not ANIME_NEWS_CHANNEL_ID:
-         logging.warning("WARNING: Neither CHAT_ID nor ANIME_NEWS_CHANNEL_ID is set!")
+    # Only warn if NO channels are set at all
+    if not (ANIME_NEWS_CHANNEL_ID or WORLD_NEWS_CHANNEL_ID):
+         logging.warning("CRITICAL: Neither CHAT_ID nor any specific channel ID (ANIME/WORLD) is set!")
+    else:
+         logging.info("Running with specific channel configurations (CHAT_ID not set).")
 
 # REDDIT_CHANNEL_ID check removed
 if not ANIME_NEWS_CHANNEL_ID:
