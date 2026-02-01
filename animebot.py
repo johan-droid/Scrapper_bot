@@ -116,6 +116,7 @@ logging.basicConfig(
 SESSION_ID = str(uuid.uuid4())[:8]
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 WORLD_NEWS_CHANNEL_ID = os.getenv("WORLD_NEWS_CHANNEL_ID")
 ANIME_NEWS_CHANNEL_ID = os.getenv("ANIME_NEWS_CHANNEL_ID")
 ADMIN_ID = os.getenv("ADMIN_ID")
