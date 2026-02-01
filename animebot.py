@@ -1376,54 +1376,11 @@ def run_once():
     # 6. Report
     send_admin_report(run_id, "success", sent_count, source_counts)
 
-# --- 10. SCHEDULER & DAEMON ---
-def sleep_until_next_slot():
-    """Calculates seconds until the next 4-hour slot (0, 4, 8, 12, 16, 20 IST)."""
-    now = now_local()
-    current_hour = now.hour
-    
-    # Calculate next slot
-    # integer division gives current slot index (e.g. 13 // 4 = 3)
-    # next slot index = 4 -> hour 16
-    next_slot_hour = ((current_hour // 4) + 1) * 4
-    
-    target = now.replace(minute=0, second=0, microsecond=0)
-    
-    if next_slot_hour >= 24:
-         # Move to tomorrow 00:00
-         target = target + timedelta(days=1)
-         target = target.replace(hour=0)
-    else:
-         target = target.replace(hour=next_slot_hour)
-         
-    seconds = (target - now).total_seconds()
-    # Ensure positive
-    if seconds < 0: seconds = 0
-    
-    logging.info(f"😴 Sleeping {seconds/3600:.2f} hours until next slot at {target}...")
-    time.sleep(seconds + 120) # +2 minute buffer to ensure we are well into the slot
-
-def run_daemon():
-    """Continuous execution loop."""
-    logging.info("🚀 Starting Scrapper Bot in DAEMON mode.")
-    while True:
-        try:
-            run_once()
-        except Exception as e:
-             logging.error(f"Run crashed: {e}")
-             time.sleep(60) # Brief pause before retry logic or sleep
-             
-        sleep_until_next_slot()
-
 if __name__ == "__main__":
     try:
-        # Check for mode argument or just default to daemon?
-        # User said "Deployment Steps" and "Compute sleep to next".
-        # We'll check an ENV var 'MODE' or default to run_daemon if direct execution.
-        # But to be safe for existing CRON jobs, we might want run_once?
-        # Actually user explicitly asked for "Compute sleep to next", which implies internal scheduling.
-        # I'll enable daemon mode by default.
-        run_daemon()
+        # CRON MODE: Run once and exit.
+        # The external scheduler (GitHub Actions, Cron, etc.) determines when to run.
+        run_once()
     except KeyboardInterrupt:
         logging.info("Bot stopped by user.")
     except Exception as e:
