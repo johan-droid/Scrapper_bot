@@ -328,27 +328,13 @@ def ensure_daily_row(date_obj):
     except Exception: pass
 
 def increment_post_counters(date_obj):
-    """Client-side atomic increment to avoid RPC 'WHERE clause' error."""
+    """Calls server-side functions to increment counters safely."""
     if not supabase: return
     try:
-        # 1. Update Daily Stats
-        # First ensure row exists (done by ensure_daily_row previously, but good to double check or just upsert)
-        # Using a raw query or simple read-update loop given Supabase-py limits
-        r = supabase.table("daily_stats").select("posts_count").eq("date", str(date_obj)).single().execute()
-        if r.data:
-            new_count = r.data['posts_count'] + 1
-            supabase.table("daily_stats").update({"posts_count": new_count}).eq("date", str(date_obj)).execute()
-        else:
-             supabase.table("daily_stats").insert({"date": str(date_obj), "posts_count": 1}).execute()
-
-        # 2. Update Bot Stats (Global)
-        r_bot = supabase.table("bot_stats").select("*").limit(1).execute()
-        if r_bot.data:
-            row_id = r_bot.data[0]['id']
-            curr_total = r_bot.data[0]['total_posts_all_time']
-            supabase.table("bot_stats").update({"total_posts_all_time": curr_total + 1}).eq("id", row_id).execute()
+        supabase.rpc('increment_daily_stats', {'row_date': str(date_obj)}).execute()
+        supabase.rpc('increment_bot_stats').execute()
     except Exception as e:
-        logging.error(f"Stats update failed: {e}")
+        logging.error(f"Atomic stats update failed: {e}")
 
 def create_or_reuse_run(date_obj, slot, scheduled_local):
     if not supabase: return f"local-{slot}" # Fallback for local testing only
@@ -380,16 +366,15 @@ def finish_run(run_id, status, posts_sent, source_counts, error=None):
 def load_posted_titles(date_obj):
     if not supabase: return set()
     try:
-        # Check last 7 days to prevent duplicate spam from previous days (more robust sync with DB)
-        start_date = date_obj - timedelta(days=7)
-        r = supabase.table("posted_news").select("normalized_title").gte("posted_date", str(start_date)).execute()
-        return set(x["normalized_title"] for x in r.data)
+        # STRICT 24-HOUR RESET MODE: Only check today's posts.
+        r = supabase.table("posted_news").select("normalized_title").eq("posted_date", str(date_obj)).execute()
+        return set(x["normalized_title"].lower() for x in r.data)
     except Exception as e:
         logging.error(f"Failed to load posted titles: {e}")
         return set()
 
 def record_post(title, source_code, run_id, slot, posted_titles_set, category=None):
-    key = get_normalized_key(title)
+    key = get_normalized_key(title).lower()
     if key in posted_titles_set: return False
     
     date_obj = now_local().date()
@@ -1077,6 +1062,16 @@ def run_once():
     if run_id is None:
         logging.info("✅ Slot already completed successfully. Exiting.")
         return
+
+    # 1.5 AUTO-RESET: Clean old posted_news entries (older than today)
+    if supabase:
+        try:
+             # This effectively "Resets" the memory every 24 hours
+             # Delete anything where posted_date < today
+             supabase.table("posted_news").delete().lt("posted_date", str(date_obj)).execute()
+             logging.info("🧹 Auto-cleaned old posts from database (24h reset).")
+        except Exception as e:
+             logging.warning(f"Auto-cleanup failed: {e}")
 
     # 2. Fetch Data
     posted_set = load_posted_titles(date_obj)
