@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS posted_news (
     source TEXT,
     category TEXT,
     run_id BIGINT REFERENCES runs(id),
-    slot INTEGER
+    slot INTEGER,
+    status TEXT DEFAULT 'sent'
 );
 
 -- Index for faster lookups on deduplication

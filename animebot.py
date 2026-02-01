@@ -934,7 +934,8 @@ def fetch_jikan_safe():
 
 def fetch_details_concurrently(items):
     def get_details(item: NewsItem):
-        if not item.article_url: return item
+        if not item.article_url or not item.article_url.startswith("http"):
+             return item
         
         # Verify URL is scrapable (skip Google News redirect pages to avoid wrong image)
         if "news.google.com" in item.article_url:
