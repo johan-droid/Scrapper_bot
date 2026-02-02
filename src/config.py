@@ -19,6 +19,7 @@ TELEGRAPH_TOKEN = os.getenv("TELEGRAPH_TOKEN")
 # Configuration
 BASE_URL = "https://www.animenewsnetwork.com"
 DEBUG_MODE = os.getenv("DEBUG_MODE", "False").lower() == "true"
+DISABLE_PREVIEW = os.getenv("DISABLE_PREVIEW", "True").lower() == "true"
 
 SOURCE_LABEL = {
     "ANN": "Anime News Network", "ANN_DC": "ANN (Detective Conan)",

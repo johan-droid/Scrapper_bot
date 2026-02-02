@@ -9,7 +9,7 @@ from urllib3.util.retry import Retry
 from src.config import (
     BOT_TOKEN, CHAT_ID, WORLD_NEWS_CHANNEL_ID, ANIME_NEWS_CHANNEL_ID, 
     ADMIN_ID, ANIME_NEWS_SOURCES, WORLD_NEWS_SOURCES, SOURCE_LABEL, 
-    RSS_FEEDS, TELEGRAPH_TOKEN
+    RSS_FEEDS, TELEGRAPH_TOKEN, DISABLE_PREVIEW
 )
 from src.utils import safe_log, now_local, circuit_breaker, is_today_or_yesterday, should_reset_daily_tracking
 from src.database import (
@@ -274,7 +274,7 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
                     "chat_id": target_chat_id, 
                     "text": msg, 
                     "parse_mode": "HTML",
-                    "disable_web_page_preview": False  # Show preview for Telegraph links
+                    "disable_web_page_preview": DISABLE_PREVIEW
                 },
                 timeout=20
             )
@@ -288,7 +288,7 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
                         "chat_id": target_chat_id, 
                         "text": msg, 
                         "parse_mode": "HTML",
-                        "disable_web_page_preview": False
+                        "disable_web_page_preview": DISABLE_PREVIEW
                     },
                     timeout=20
                 )
