@@ -269,19 +269,6 @@ if not WORLD_NEWS_CHANNEL_ID:
 utc_tz = pytz.utc
 local_tz = pytz.timezone("Asia/Kolkata")
 
-# --- 2. DATABASE CONNECTION (ROBUST) ---
-supabase = None
-if SUPABASE_URL and SUPABASE_KEY and create_client:
-    try:
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        safe_log("info", f"Supabase connected successfully")
-    except Exception as e:
-        safe_log("warning", f"Supabase connection failed: {e}")
-        safe_log("warning", "WARNING: Running WITHOUT database. Duplicates may occur.")
-        supabase = None
-else:
-    logging.warning("WARNING: Running WITHOUT database. Duplicates will occur if runs restart.")
-
 # --- 3. SESSION HELPERS ---
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -369,6 +356,19 @@ def safe_log(level, message, *args, **kwargs):
             print(f"[{level.upper()}] {message}")
         except:
             print(f"[{level.upper()}] <encoding error>")
+
+# --- 2. DATABASE CONNECTION (ROBUST) - MOVED AFTER safe_log DEFINITION ---
+supabase = None
+if SUPABASE_URL and SUPABASE_KEY and create_client:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        safe_log("info", f"Supabase connected successfully")
+    except Exception as e:
+        safe_log("warning", f"Supabase connection failed: {e}")
+        safe_log("warning", "WARNING: Running WITHOUT database. Duplicates may occur.")
+        supabase = None
+else:
+    logging.warning("WARNING: Running WITHOUT database. Duplicates will occur if runs restart.")
 
 def escape_html(text):
     if not text or not isinstance(text, str): return ""
