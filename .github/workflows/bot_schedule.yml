@@ -45,4 +45,4 @@ jobs:
           ADMIN_ID: ${{ secrets.ADMIN_ID }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python animebot.py
+        run: python -m src.main
