@@ -1,5 +1,5 @@
-from src.utils import setup_logging, safe_log, now_local
-from src.bot import run_once, send_admin_report
+from .utils import setup_logging, safe_log, now_local
+from .bot import run_once, send_admin_report
 import time
 
 if __name__ == "__main__":
