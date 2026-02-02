@@ -185,7 +185,6 @@ test_fixes.py
 test_channels.py
 test_syntax.py
 source_monitor.py
-models.py
 .env.test
 
 # Temporary files
