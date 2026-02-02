@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: scrapper-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn src.main:app
+    plan: free
+    autoDeploy: false
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
