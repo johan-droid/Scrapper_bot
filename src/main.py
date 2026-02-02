@@ -1,8 +1,9 @@
-from .utils import setup_logging, safe_log, now_local
+from .utils import setup_logging, safe_log, now_local, patch_socket_ipv4
 from .bot import run_once, send_admin_report
 import time
 
 if __name__ == "__main__":
+    patch_socket_ipv4() # Force IPv4 for stability
     setup_logging()
     try:
         run_once()

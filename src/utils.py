@@ -143,3 +143,39 @@ class SourceCircuitBreaker:
         self.failure_counts[source] += 1
 
 circuit_breaker = SourceCircuitBreaker()
+
+def patch_socket_ipv4():
+    """
+    Monkey-patch socket.getaddrinfo to force IPv4
+    Useful for environments where IPv6 is flaky (like some GH Actions runners)
+    """
+    import socket
+    
+    real_getaddrinfo = socket.getaddrinfo
+
+    def new_getaddrinfo(*args, **kwargs):
+        # Force AF_INET (IPv4)
+        if 'family' in kwargs:
+            kwargs['family'] = socket.AF_INET
+        elif len(args) > 1:
+            # args[1] is family. We can't easily modify tuple args, 
+            # so we reconstruct args or just use kwargs convention if possible.
+            # But getaddrinfo signature is (host, port, family=0, ...).
+            # The safest way is to filter the results from the real call 
+            # OR pass AF_INET to the real call.
+            
+            # Let's try passing AF_INET as the family argument
+            # Construct new args list
+            new_args = list(args)
+            new_args[1] = socket.AF_INET # family is the 2nd argument (index 1)
+            args = tuple(new_args)
+        else:
+            # If family wasn't provided, pass it as kwarg or append to args?
+            # getaddrinfo(host, port, family=0, type=0, proto=0, flags=0)
+            # Standard generic call often looks like getaddrinfo(host, port)
+            # So we can just set family=AF_INET in kwargs if it's not in args.
+            kwargs['family'] = socket.AF_INET
+            
+        return real_getaddrinfo(*args, **kwargs)
+
+    socket.getaddrinfo = new_getaddrinfo
