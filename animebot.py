@@ -224,13 +224,13 @@ RSS_FEEDS = {
     "CNN": "http://rss.cnn.com/rss/edition_world.rss",
     "GUARD": "https://www.theguardian.com/world/rss",
     "NPR": "https://feeds.npr.org/1001/rss.xml",
-    "DW": "https://www.dw.com/en/rss/rss-en-all",
+    "DW": "https://rss.dw.com/xml/rss-en-all",
     "F24": "https://www.france24.com/en/rss",
     "CBC": "https://www.cbc.ca/cmlink/rss-world",
     # General News - THESE GO TO WORLD_NEWS_CHANNEL_ID
     "NL": "https://www.newslaundry.com/feed",
     "WIRE": "https://thewire.in/feed",
-    "CARAVAN": "https://caravanmagazine.in/feed",
+    # "CARAVAN": "https://caravanmagazine.in/feed", # 404 Error
     "SCROLL": "https://scroll.in/feed",
     "PRINT": "https://theprint.in/feed",
     "INTER": "https://theintercept.com/feed/?lang=en",
