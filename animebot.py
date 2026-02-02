@@ -33,6 +33,7 @@ class NewsItem:
         tags: Optional[List[str]] = None,
         author: Optional[str] = None,
         category: Optional[str] = None,
+        full_content: Optional[str] = None,
         **kwargs: Any
     ):
         self.title = title
@@ -44,94 +45,187 @@ class NewsItem:
         self.tags = tags or []
         self.author = author
         self.category = category
+        self.full_content = full_content
+        self.telegraph_url = None
         
-        # Store any additional fields that might be passed in
         for key, value in kwargs.items():
             setattr(self, key, value)
 
-# --- 1. SETUP & CONFIGURATION ---
-try:
-    from source_monitor import health_monitor, monitor_source_call
-except ImportError:
-    health_monitor = None
-    def monitor_source_call(source_name):
-        def decorator(func): return func
-        return decorator
 
-# Standard Supabase Import (Assumes >= 2.0.0)
-try:
-    from supabase import create_client, Client
-except ImportError:
-    logging.warning("Supabase library not found. Running in memory-only mode.")
-    create_client = None
-    Client = None
-
-
-def clean_text_extractor(html_text_or_element, limit=350):
-    """
-    Robustly cleans HTML content and removes junk data.
-    """
-    if not html_text_or_element: return "No summary available."
-
-    # Convert BS4 element to string if needed
-    if hasattr(html_text_or_element, "get_text"):
-        soup = html_text_or_element
-    else:
-        raw_str = str(html_text_or_element)
-        if "<" in raw_str and ">" in raw_str:
-             soup = BeautifulSoup(raw_str, "html.parser")
-        else:
-             return raw_str[:limit]
-
-    # Remove script and style tags entirely
-    for script in soup(["script", "style", "header", "footer", "a"]):
-        script.decompose()
+class TelegraphClient:
+    """Client for creating Telegraph articles"""
+    
+    def __init__(self, access_token=None):
+        self.base_url = "https://api.telegra.ph"
+        self.access_token = access_token
+        self.session = requests.Session()
         
-    text = soup.get_text(separator=" ")
+        # Create account if no token provided
+        if not self.access_token:
+            self.create_account()
     
-    # Remove URL-like strings and extra whitespace
-    text = re.sub(r'http\S+', '', text)
-    text = re.sub(r'\s+', ' ', text).strip()
+    def create_account(self):
+        """Create a Telegraph account"""
+        try:
+            response = self.session.post(
+                f"{self.base_url}/createAccount",
+                data={
+                    "short_name": "News Bot",
+                    "author_name": "Anime & World News Bot",
+                    "author_url": "https://t.me/Detective_Conan_News"
+                },
+                timeout=10
+            )
+            data = response.json()
+            if data.get('ok'):
+                self.access_token = data['result']['access_token']
+                logging.info("[OK] Telegraph account created")
+                return True
+            else:
+                logging.error(f"[ERROR] Telegraph account creation failed: {data}")
+                return False
+        except Exception as e:
+            logging.error(f"[ERROR] Telegraph account error: {e}")
+            return False
     
-    # Fix common encoding artifacts
-    text = text.replace('â€™', "'").replace('â€"', "—").replace('&nbsp;', ' ')
+    def create_page(self, title, content, author_name=None, author_url=None, return_content=False):
+        """
+        Create a Telegraph page
+        
+        Args:
+            title: Page title
+            content: List of Node objects or HTML string
+            author_name: Author name
+            author_url: Author URL
+            return_content: Whether to return content in response
+        
+        Returns:
+            dict with 'ok' status and 'result' containing page data
+        """
+        if not self.access_token:
+            logging.error("[ERROR] No Telegraph access token")
+            return None
+        
+        try:
+            # Convert HTML to Telegraph nodes if string provided
+            if isinstance(content, str):
+                content = self._html_to_nodes(content)
+            
+            data = {
+                "access_token": self.access_token,
+                "title": title[:256],  # Telegraph title limit
+                "content": json.dumps(content),
+                "return_content": return_content
+            }
+            
+            if author_name:
+                data["author_name"] = author_name[:128]
+            if author_url:
+                data["author_url"] = author_url
+            
+            response = self.session.post(
+                f"{self.base_url}/createPage",
+                data=data,
+                timeout=15
+            )
+            
+            result = response.json()
+            if result.get('ok'):
+                logging.info(f"[OK] Telegraph page created: {result['result']['url']}")
+                return result['result']
+            else:
+                logging.error(f"[ERROR] Telegraph page creation failed: {result}")
+                return None
+                
+        except Exception as e:
+            logging.error(f"[ERROR] Telegraph page creation error: {e}")
+            return None
     
-    if len(text) > limit:
-        return text[:limit-3].strip() + "..."
-    return text
+    def _html_to_nodes(self, html_content):
+        """Convert HTML to Telegraph DOM nodes"""
+        soup = BeautifulSoup(html_content, 'html.parser')
+        nodes = []
+        
+        for element in soup.children:
+            node = self._element_to_node(element)
+            if node:
+                nodes.append(node)
+        
+        return nodes
+    
+    def _element_to_node(self, element):
+        """Convert BeautifulSoup element to Telegraph node"""
+        if isinstance(element, str):
+            text = element.strip()
+            return text if text else None
+        
+        if element.name is None:
+            return None
+        
+        # Handle different HTML tags
+        tag_map = {
+            'p': 'p',
+            'b': 'strong', 'strong': 'strong',
+            'i': 'em', 'em': 'em',
+            'a': 'a',
+            'h1': 'h3', 'h2': 'h3', 'h3': 'h3', 'h4': 'h4',
+            'blockquote': 'blockquote',
+            'pre': 'pre',
+            'code': 'code',
+            'br': 'br',
+            'img': 'img'
+        }
+        
+        tag = tag_map.get(element.name)
+        if not tag:
+            # For unsupported tags, extract text
+            return element.get_text(strip=True) or None
+        
+        # Build node structure
+        node = {'tag': tag}
+        
+        # Handle attributes
+        if tag == 'a' and element.get('href'):
+            node['attrs'] = {'href': element['href']}
+        elif tag == 'img' and element.get('src'):
+            node['attrs'] = {'src': element['src']}
+        
+        # Handle children
+        if tag not in ['br', 'img']:
+            children = []
+            for child in element.children:
+                child_node = self._element_to_node(child)
+                if child_node:
+                    children.append(child_node)
+            
+            if children:
+                node['children'] = children
+        
+        return node
+
 
 # Load env vars
 env_path = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(env_path, override=True)
 
-# Windows terminal compatibility - FIXED
+# UTF-8 handling
 import sys
-import os
-
-# Set environment variables for UTF-8 support
 os.environ['PYTHONIOENCODING'] = 'utf-8'
 
-# Windows-specific encoding fixes
 if sys.platform == "win32":
     import codecs
-    import locale
-    
-    # Set console code page to UTF-8
     try:
         import subprocess
         subprocess.run(['chcp', '65001'], shell=True, capture_output=True)
     except:
         pass
     
-    # Configure stdout/stderr for UTF-8
     try:
         sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
         sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
     except (AttributeError, OSError):
-        # Fallback for older Python versions or different terminal types
         pass
 
-# Ensure UTF-8 encoding for all string operations
 try:
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -140,12 +234,11 @@ try:
 except (AttributeError, OSError):
     pass
 
-# Configure logging with UTF-8 support
+# Logging
 class UTF8StreamHandler(logging.StreamHandler):
     def emit(self, record):
         try:
             msg = self.format(record)
-            # Ensure message is properly encoded
             if isinstance(msg, str):
                 msg = msg.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
             stream = self.stream
@@ -163,6 +256,7 @@ logging.basicConfig(
 
 SESSION_ID = str(uuid.uuid4())[:8]
 
+# Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 WORLD_NEWS_CHANNEL_ID = os.getenv("WORLD_NEWS_CHANNEL_ID")
@@ -170,6 +264,27 @@ ANIME_NEWS_CHANNEL_ID = os.getenv("ANIME_NEWS_CHANNEL_ID")
 ADMIN_ID = os.getenv("ADMIN_ID")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+TELEGRAPH_TOKEN = os.getenv("TELEGRAPH_TOKEN")  # Optional: reuse existing token
+
+# Initialize Telegraph client
+telegraph = TelegraphClient(access_token=TELEGRAPH_TOKEN)
+
+# Supabase connection
+try:
+    from supabase import create_client, Client
+except ImportError:
+    logging.warning("Supabase library not found. Running in memory-only mode.")
+    create_client = None
+    Client = None
+
+supabase = None
+if SUPABASE_URL and SUPABASE_KEY and create_client:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        logging.info("[OK] Supabase connected successfully")
+    except Exception as e:
+        logging.warning(f"Supabase connection failed: {e}")
+        supabase = None
 
 # Circuit breaker
 class SourceCircuitBreaker:
@@ -188,37 +303,27 @@ class SourceCircuitBreaker:
 
 circuit_breaker = SourceCircuitBreaker()
 
+# Configuration
 BASE_URL = "https://www.animenewsnetwork.com"
-BASE_URL_DC = "https://www.detectiveconanworld.com"
-BASE_URL_TMS = "https://tmsanime.com"
-BASE_URL_FANDOM = "https://detectiveconan.fandom.com"
-BASE_URL_ANN_DC = "https://www.animenewsnetwork.com/encyclopedia/anime.php?id=454&tab=news"
 DEBUG_MODE = False
 
 SOURCE_LABEL = {
     "ANN": "Anime News Network", "ANN_DC": "ANN (Detective Conan)",
     "DCW": "Detective Conan Wiki", "TMS": "TMS Entertainment", "FANDOM": "Fandom Wiki",
-    "ANI": "Anime News India",
-    "MAL": "MyAnimeList (Jikan)", "CR": "Crunchyroll News",
+    "ANI": "Anime News India", "MAL": "MyAnimeList", "CR": "Crunchyroll News",
     "AC": "Anime Corner", "HONEY": "Honey's Anime",
-    "AP": "AP News (Entertainment)",
-    "REUTERS": "Reuters (Lifestyle)",
-    # World News Sources
     "BBC": "BBC World News", "ALJ": "Al Jazeera", "CNN": "CNN World", "GUARD": "The Guardian",
     "NPR": "NPR International", "DW": "Deutsche Welle", "F24": "France 24", "CBC": "CBC World",
-    # General News Sources
-    "NL": "NewsLaundry", "WIRE": "The Wire", "CARAVAN": "Caravan Magazine", "SCROLL": "Scroll.in",
-    "PRINT": "The Print", "INTER": "The Intercept", "PRO": "ProPublica"
+    "NL": "NewsLaundry", "WIRE": "The Wire", "SCROLL": "Scroll.in",
+    "PRINT": "The Print", "INTER": "The Intercept", "PRO": "ProPublica", "REUTERS": "Reuters"
 }
 
-# RSS Feeds Dictionary
+# RSS Feeds
 RSS_FEEDS = {
-    # Anime
     "ANI": "https://animenewsindia.com/feed/",
     "CR": "https://cr-news-api-service.prd.crunchyrollsvc.com/v1/en-US/rss",
     "AC": "https://animecorner.me/feed/",
     "HONEY": "https://honeysanime.com/feed/",
-    # World News - THESE MUST GO TO WORLD_NEWS_CHANNEL_ID
     "BBC": "http://feeds.bbci.co.uk/news/world/rss.xml",
     "ALJ": "https://www.aljazeera.com/xml/rss/all.xml",
     "CNN": "http://rss.cnn.com/rss/edition_world.rss",
@@ -227,31 +332,20 @@ RSS_FEEDS = {
     "DW": "https://rss.dw.com/xml/rss-en-all",
     "F24": "https://www.france24.com/en/rss",
     "CBC": "https://www.cbc.ca/cmlink/rss-world",
-    # General News - THESE GO TO WORLD_NEWS_CHANNEL_ID
     "NL": "https://www.newslaundry.com/feed",
     "WIRE": "https://thewire.in/feed",
-    # "CARAVAN": "https://caravanmagazine.in/feed", # 404 Error
     "SCROLL": "https://scroll.in/feed",
     "PRINT": "https://theprint.in/feed",
     "INTER": "https://theintercept.com/feed/?lang=en",
     "PRO": "https://www.propublica.org/feeds/propublica/main",
 }
 
-JIKAN_BASE = "https://api.jikan.moe/v4"
-BASE_URL_AP_NEWS = "https://apnews.com/hub/entertainment"
-
-# ===== CRITICAL: CHANNEL ROUTING CONFIGURATION =====
-# Define which sources go to which channel
+# Channel routing
 ANIME_NEWS_SOURCES = {"ANN", "ANN_DC", "DCW", "TMS", "FANDOM", "ANI", "MAL", "CR", "AC", "HONEY"}
-
-# WORLD NEWS SOURCES - MUST POST TO WORLD_NEWS_CHANNEL_ID
 WORLD_NEWS_SOURCES = {
-    "AP", "REUTERS",
-    "BBC", "ALJ", "CNN", "GUARD", "NPR", "DW", "F24", "CBC",  # World News
-    "NL", "WIRE", "CARAVAN", "SCROLL", "PRINT", "INTER", "PRO"  # General News
+    "BBC", "ALJ", "CNN", "GUARD", "NPR", "DW", "F24", "CBC",
+    "NL", "WIRE", "SCROLL", "PRINT", "INTER", "PRO", "REUTERS"
 }
-
-ALL_NEWS_SOURCES = ANIME_NEWS_SOURCES | WORLD_NEWS_SOURCES
 
 if not BOT_TOKEN:
     logging.error("CRITICAL: BOT_TOKEN is missing.")
@@ -261,36 +355,29 @@ if not ANIME_NEWS_CHANNEL_ID and not CHAT_ID:
     logging.error("CRITICAL: Either ANIME_NEWS_CHANNEL_ID or CHAT_ID must be set.")
     raise SystemExit(1)
 
-if not ANIME_NEWS_CHANNEL_ID:
-    logging.warning("ANIME_NEWS_CHANNEL_ID not set - Anime posts will go to main channel")
-if not WORLD_NEWS_CHANNEL_ID:
-    logging.warning("WORLD_NEWS_CHANNEL_ID not set - World News posts will go to main channel")
-
 utc_tz = pytz.utc
 local_tz = pytz.timezone("Asia/Kolkata")
 
-# --- 3. SESSION HELPERS ---
+# Session helpers
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
 ]
 
 def get_scraping_session():
     session = requests.Session()
     retry_strategy = Retry(
         total=3, backoff_factor=2,
-        status_forcelist=[429, 500, 502, 503, 504, 104],
+        status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET", "POST"]
     )
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
     
-    ua = random.choice(USER_AGENTS)
     session.headers.update({
-        "User-Agent": ua,
+        "User-Agent": random.choice(USER_AGENTS),
         "Connection": "close",
         "Accept-Charset": "utf-8",
         "Accept-Encoding": "gzip, deflate"
@@ -309,12 +396,11 @@ def get_fresh_telegram_session():
     tg_session.headers.update({"Connection": "close"})
     return tg_session
 
-# --- 4. TIME HELPERS ---
+# Time helpers
 def now_local(): 
     return datetime.now(local_tz)
 
 def is_today_or_yesterday(dt_to_check):
-    """Check if a date is today or yesterday in IST"""
     if not dt_to_check:
         return False
     today = now_local().date()
@@ -323,59 +409,141 @@ def is_today_or_yesterday(dt_to_check):
     return check_date in [today, yesterday]
 
 def should_reset_daily_tracking():
-    """Check if we should reset daily tracking (new day started)"""
     now = now_local()
-    # Reset happens at midnight IST
-    if now.hour == 0 and now.minute < 15:  # Within first 15 minutes of new day
+    if now.hour == 0 and now.minute < 15:
         return True
     return False
 
-# --- 5. TEXT & VALIDATION HELPERS ---
+# Text helpers
 def safe_log(level, message, *args, **kwargs):
-    """Safe logging function that handles encoding issues"""
     try:
-        # Ensure message is string and properly encoded
         if not isinstance(message, str):
             message = str(message)
         message = message.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
         
-        # Remove problematic Unicode characters that cause terminal issues
-        message = message.replace('✅', '[OK]').replace('❌', '[ERROR]').replace('⚠️', '[WARN]')
-        message = message.replace('🚫', '[BLOCKED]').replace('📍', '[ROUTE]').replace('🔄', '[RESET]')
-        message = message.replace('📡', '[FETCH]').replace('📤', '[SEND]').replace('🔍', '[ENRICH]')
-        message = message.replace('🚀', '[START]').replace('📅', '[DATE]').replace('🕒', '[SLOT]')
-        message = message.replace('⏰', '[TIME]').replace('📚', '[LOAD]').replace('⏭️', '[SKIP]')
-        message = message.replace('⏳', '[WAIT]').replace('🤖', '[BOT]').replace('📊', '[STATS]')
-        message = message.replace('📈', '[TOTAL]').replace('🏆', '[ALL]').replace('📰', '[SOURCE]')
-        message = message.replace('🏥', '[HEALTH]').replace('🌍', '[WORLD]').replace('🕵️', '[CONAN]')
+        emoji_map = {
+            '✅': '[OK]', '❌': '[ERROR]', '⚠️': '[WARN]', '🚫': '[BLOCKED]',
+            '📍': '[ROUTE]', '🔄': '[RESET]', '📡': '[FETCH]', '📤': '[SEND]',
+            '🔍': '[ENRICH]', '🚀': '[START]', '📅': '[DATE]', '🕒': '[SLOT]',
+            '⏰': '[TIME]', '📚': '[LOAD]', '⏭️': '[SKIP]', '⏳': '[WAIT]',
+            '🤖': '[BOT]', '📊': '[STATS]', '📈': '[TOTAL]', '🏆': '[ALL]',
+            '📰': '[SOURCE]', '🏥': '[HEALTH]', '🌍': '[WORLD]', '🕵️': '[CONAN]'
+        }
+        
+        for emoji, text in emoji_map.items():
+            message = message.replace(emoji, text)
         
         getattr(logging, level.lower())(message, *args, **kwargs)
     except Exception:
-        # Fallback to basic print if logging fails
         try:
             print(f"[{level.upper()}] {message}")
         except:
             print(f"[{level.upper()}] <encoding error>")
 
-# --- 2. DATABASE CONNECTION (ROBUST) - MOVED AFTER safe_log DEFINITION ---
-supabase = None
-if SUPABASE_URL and SUPABASE_KEY and create_client:
+def clean_text_extractor(html_text_or_element, limit=350):
+    if not html_text_or_element: 
+        return "No summary available."
+
+    if hasattr(html_text_or_element, "get_text"):
+        soup = html_text_or_element
+    else:
+        raw_str = str(html_text_or_element)
+        if "<" in raw_str and ">" in raw_str:
+             soup = BeautifulSoup(raw_str, "html.parser")
+        else:
+             return raw_str[:limit]
+
+    for script in soup(["script", "style", "header", "footer"]):
+        script.decompose()
+        
+    text = soup.get_text(separator=" ")
+    text = re.sub(r'http\S+', '', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    text = text.replace('â€™', "'").replace('â€"', "—").replace('&nbsp;', ' ')
+    
+    if len(text) > limit:
+        return text[:limit-3].strip() + "..."
+    return text
+
+def extract_full_article_content(url, source):
+    """
+    Extract full article content for Telegraph posting
+    Returns dict with 'text', 'images', and 'html'
+    """
+    session = get_scraping_session()
     try:
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        safe_log("info", f"Supabase connected successfully")
+        response = session.get(url, timeout=15)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Remove unwanted elements
+        for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside', 'iframe', 'ads']):
+            tag.decompose()
+        
+        # Source-specific selectors
+        content_selectors = {
+            'BBC': ['.article__body-content', '.story-body__inner', 'article'],
+            'GUARD': ['.article-body-commercial-selector', '.content__article-body', 'article'],
+            'CNN': ['.article__content', '.zn-body__paragraph', 'article'],
+            'ALJ': ['.article-p-wrapper', '.wysiwyg', 'article'],
+            'NPR': ['#storytext', '.storytext', 'article'],
+            'REUTERS': ['.article-body__content__', '.StandardArticleBody_body', 'article'],
+            'default': ['article', '.post-content', '.entry-content', '.article-content', '.story-content']
+        }
+        
+        selectors = content_selectors.get(source, content_selectors['default'])
+        
+        content_div = None
+        for selector in selectors:
+            content_div = soup.select_one(selector)
+            if content_div:
+                break
+        
+        if not content_div:
+            content_div = soup.find('body')
+        
+        if not content_div:
+            return None
+        
+        # Extract images
+        images = []
+        for img in content_div.find_all('img', limit=5):
+            src = img.get('src') or img.get('data-src') or img.get('data-lazy-src')
+            if src and not any(x in src for x in ['logo', 'icon', 'avatar', 'ads', '1x1']):
+                if not src.startswith('http'):
+                    from urllib.parse import urljoin
+                    src = urljoin(url, src)
+                images.append(src)
+        
+        # Extract paragraphs with proper formatting
+        paragraphs = []
+        for p in content_div.find_all(['p', 'h2', 'h3', 'blockquote'], recursive=True):
+            text = p.get_text(strip=True)
+            if len(text) > 20 and not any(x in text.lower() for x in ['cookie', 'subscribe', 'newsletter', 'advertisement']):
+                if p.name in ['h2', 'h3']:
+                    paragraphs.append(f'<h3>{text}</h3>')
+                elif p.name == 'blockquote':
+                    paragraphs.append(f'<blockquote>{text}</blockquote>')
+                else:
+                    paragraphs.append(f'<p>{text}</p>')
+        
+        # Build HTML content
+        html_content = '\n'.join(paragraphs)
+        
+        return {
+            'html': html_content,
+            'text': clean_text_extractor(content_div, limit=5000),
+            'images': images
+        }
+        
     except Exception as e:
-        safe_log("warning", f"Supabase connection failed: {e}")
-        safe_log("warning", "WARNING: Running WITHOUT database. Duplicates may occur.")
-        supabase = None
-else:
-    logging.warning("WARNING: Running WITHOUT database. Duplicates will occur if runs restart.")
+        logging.debug(f"Content extraction failed for {url}: {e}")
+        return None
+    finally:
+        session.close()
 
-def escape_html(text):
-    if not text or not isinstance(text, str): return ""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
+# Database helpers
 def normalize_title(title):
-    """Normalize title for fuzzy matching"""
     prefixes = ["BREAKING:", "NEW:", "UPDATE:", "DC Wiki Update: ", "TMS News: ", 
                 "Fandom Wiki Update: ", "ANN DC News: ", "ANN:", "Reuters:", "BBC:"]
     t = title
@@ -386,46 +554,21 @@ def normalize_title(title):
     t = re.sub(r'[^\w\s]', '', t)
     return t.lower().strip()
 
-def validate_image_url(image_url):
-    if not image_url: return False
-    session = get_scraping_session()
-    try:
-        headers = {"Range": "bytes=0-511"}
-        r = session.get(image_url, headers=headers, timeout=10, stream=True)
-        r.raise_for_status()
-        return r.headers.get("content-type", "").startswith("image/")
-    except Exception:
-        return False
-    finally:
-        session.close()
-
-# --- 6. ENHANCED DATABASE LOGIC WITH STRONG SPAM DETECTION ---
 def is_duplicate(title, url, posted_titles_set, date_check=True):
-    """
-    STRONG SPAM DETECTION:
-    1. Check normalized title in memory set
-    2. Fuzzy match against recent titles (>85% similarity)
-    3. Check database for permanent history
-    4. Verify date is today or yesterday (unless DEBUG_MODE)
-    """
     norm_title = normalize_title(title)
     
-    # Quick exact check in local set
     if norm_title in posted_titles_set:
         safe_log("info", f"DUPLICATE (Exact): {title[:50]}")
         return True
     
-    # Fuzzy check against local set with HIGHER threshold (85%)
     for existing in posted_titles_set:
         ratio = difflib.SequenceMatcher(None, norm_title, existing).ratio()
-        if ratio > 0.85:  # Increased from 0.7 to 0.85 for stronger detection
+        if ratio > 0.85:
             safe_log("info", f"DUPLICATE (Fuzzy {ratio:.2%}): {title[:50]}")
             return True
     
-    # Database check for permanent history
     if supabase:
         try:
-            # Check last 7 days for this normalized title
             past_date = str((now_local().date() - timedelta(days=7)))
             r = supabase.table("posted_news")\
                 .select("normalized_title, posted_date")\
@@ -469,7 +612,6 @@ def ensure_daily_row(date_obj):
         logging.error(f"Failed to ensure daily row: {e}")
 
 def increment_post_counters(date_obj):
-    """Calls server-side functions to increment counters safely."""
     if not supabase: return
     try:
         supabase.rpc('increment_daily_stats', {'row_date': str(date_obj)}).execute()
@@ -478,7 +620,6 @@ def increment_post_counters(date_obj):
         logging.error(f"Atomic stats update failed: {e}")
 
 def load_posted_titles(date_obj):
-    """Load posted titles from last 7 days for strong deduplication"""
     if not supabase: return set()
     try:
         past_date = str(date_obj - timedelta(days=7))
@@ -500,16 +641,14 @@ def load_posted_titles(date_obj):
         logging.error(f"Failed to load posted titles: {e}")
         return set()
 
-def record_post(title, source_code, slot, posted_titles_set, category=None, status='sent'):
-    """Record a post to database with strong tracking"""
+def record_post(title, source_code, slot, posted_titles_set, category=None, status='sent', telegraph_url=None):
     key = normalize_title(title)
     date_obj = now_local().date()
     
-    # Determine channel type based on source
     if source_code in WORLD_NEWS_SOURCES:
         channel_type = 'world'
     else:
-        channel_type = 'anime'  # Includes both anime and DC news
+        channel_type = 'anime'
     
     if supabase:
         try:
@@ -522,7 +661,8 @@ def record_post(title, source_code, slot, posted_titles_set, category=None, stat
                 "slot": slot,
                 "category": category,
                 "status": status,
-                "channel_type": channel_type
+                "channel_type": channel_type,
+                "article_url": telegraph_url if telegraph_url else None
             }
             supabase.table("posted_news").insert(payload).execute()
             
@@ -535,13 +675,11 @@ def record_post(title, source_code, slot, posted_titles_set, category=None, stat
             logging.warning(f"DB Record failed: {e}")
             return False
     else:
-        # If no DB, just track in memory for this session
         if status == 'sent':
             posted_titles_set.add(key)
         return True
 
 def update_post_status(title, status):
-    """Updates the status of a post"""
     if not supabase: return
     try:
         key = normalize_title(title)
@@ -554,71 +692,8 @@ def update_post_status(title, status):
     except Exception as e:
         logging.warning(f"Failed to update status for {title}: {e}")
 
-# --- 7. SCRAPERS (CONDENSED) ---
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=3, max=10))
-def fetch_generic(url, source_name, parser_func):
-    session = get_scraping_session()
-    try:
-        r = session.get(url, timeout=(5, 20), stream=False) 
-        r.raise_for_status()
-        return parser_func(r.text)
-    except requests.exceptions.HTTPError as e:
-        logging.error(f"HTTP {e.response.status_code} from {source_name}: {url}")
-        circuit_breaker.record_failure(source_name)
-        return []
-    except Exception as e:
-        logging.error(f"{source_name} critical failure: {str(e)}")
-        circuit_breaker.record_failure(source_name)
-        return []
-    finally:
-        session.close()
-
-def parse_ann(html):
-    soup = BeautifulSoup(html, "html.parser")
-    today = now_local().date()
-    yesterday = today - timedelta(days=1)
-    out = []
-    
-    for article in soup.find_all("div", class_="herald box news t-news"):
-        title_tag, date_tag = article.find("h3"), article.find("time")
-        if not title_tag or not date_tag: continue
-        
-        try:
-            news_date = datetime.fromisoformat(date_tag.get("datetime", "")).astimezone(local_tz).date()
-        except: 
-            continue
-        
-        # STRICT DATE FILTERING: Only today or yesterday
-        if not DEBUG_MODE and news_date not in [today, yesterday]:
-            continue
-            
-        link = title_tag.find("a")
-        item = NewsItem(
-            source="ANN",
-            title=title_tag.get_text(" ", strip=True),
-            article_url=f"{BASE_URL}{link['href']}" if link else None,
-            publish_date=datetime.combine(news_date, datetime.min.time()).replace(tzinfo=local_tz)
-        )
-        
-        intro = article.find("div", class_="intro") 
-        if intro:
-            item.summary_text = clean_text_extractor(intro)
-
-        out.append(item)
-    return out
-
-def parse_ann_dc(html):
-    items = parse_ann(html)
-    for i in items: 
-        i.source = "ANN_DC"
-        i.title = f"ANN DC News: {i.title}"
-    return items
-
+# RSS parsing
 def parse_rss_robust(soup, source_code):
-    """
-    Parses generic RSS/Atom feeds with STRICT date filtering
-    Enhanced to handle multiple link formats and website structure changes
-    """
     items = []
     entries = soup.find_all(['item', 'entry'])
     
@@ -627,7 +702,6 @@ def parse_rss_robust(soup, source_code):
 
     for entry in entries:
         try:
-            # Date Checking (STRICT)
             pub_date = None
             date_tag = entry.find(['pubDate', 'published', 'dc:date', 'updated'])
             if date_tag:
@@ -639,7 +713,6 @@ def parse_rss_robust(soup, source_code):
                     except:
                         pub_date = datetime.fromisoformat(dt_text.replace('Z', '+00:00')).astimezone(local_tz).date()
                     
-                    # STRICT: Only today or yesterday
                     if not DEBUG_MODE and pub_date not in [today, yesterday]:
                         continue
                 except: 
@@ -649,29 +722,22 @@ def parse_rss_robust(soup, source_code):
             if not title_tag:
                 continue
             
-            # ENHANCED LINK EXTRACTION - Multiple fallback methods
+            # Link extraction
             link_str = None
-            
-            # Method 1: Try <link> tag with href attribute
             link_tag = entry.find('link')
             if link_tag:
-                # Check for href attribute first
                 if link_tag.get('href'):
                     link_str = link_tag.get('href')
-                # Check for text content
                 elif link_tag.text and link_tag.text.strip():
                     link_str = link_tag.text.strip()
             
-            # Method 2: Try <guid> tag (often contains URL)
             if not link_str:
                 guid_tag = entry.find('guid')
                 if guid_tag:
                     guid_text = guid_tag.text.strip()
-                    # Check if guid is a valid URL
                     if guid_text.startswith('http'):
                         link_str = guid_text
             
-            # Method 3: Try <id> tag (Atom feeds)
             if not link_str:
                 id_tag = entry.find('id')
                 if id_tag:
@@ -679,36 +745,15 @@ def parse_rss_robust(soup, source_code):
                     if id_text.startswith('http'):
                         link_str = id_text
             
-            # Method 4: Try alternate link (Atom feeds)
-            if not link_str:
-                alt_link = entry.find('link', {'rel': 'alternate'})
-                if alt_link and alt_link.get('href'):
-                    link_str = alt_link.get('href')
-            
-            # Method 5: Search in description/content for URLs
-            if not link_str:
-                desc = entry.find(['description', 'content', 'content:encoded'])
-                if desc:
-                    desc_text = desc.text
-                    # Extract first URL from description
-                    url_match = re.search(r'https?://[^\s<>"]+', desc_text)
-                    if url_match:
-                        link_str = url_match.group(0)
-            
-            # Skip if no link found
             if not link_str or not link_str.startswith('http'):
-                logging.debug(f"No valid link found for: {title_tag.text[:50]}")
                 continue
 
-            # Image Handling - Multiple methods
+            # Image extraction
             image_url = None
-            
-            # Method 1: media:content
             media = entry.find('media:content')
             if media and media.get('url'):
                 image_url = media.get('url')
             
-            # Method 2: enclosure
             if not image_url:
                 enclosure = entry.find('enclosure')
                 if enclosure and enclosure.get('url'):
@@ -716,28 +761,17 @@ def parse_rss_robust(soup, source_code):
                     if 'image' in enc_type or not enc_type:
                         image_url = enclosure.get('url')
             
-            # Method 3: media:thumbnail
             if not image_url:
                 thumb = entry.find('media:thumbnail')
                 if thumb and thumb.get('url'):
                     image_url = thumb.get('url')
             
-            # Method 4: Extract from content/description
-            if not image_url:
-                content = entry.find(['content:encoded', 'content', 'description'])
-                if content:
-                    c_soup = BeautifulSoup(content.text, "html.parser")
-                    img = c_soup.find("img")
-                    if img:
-                        image_url = img.get("src") or img.get("data-src")
-            
-            # Summary - Enhanced extraction
+            # Summary
             summary_text = ""
             description = entry.find(['description', 'summary', 'content', 'content:encoded'])
             if description:
                 summary_text = clean_text_extractor(description)
             
-            # If no summary, try to extract from title
             if not summary_text or len(summary_text) < 20:
                 summary_text = f"Read more about: {title_tag.text.strip()}"
 
@@ -764,7 +798,6 @@ def parse_rss_robust(soup, source_code):
     return items
 
 def fetch_rss(url, source_name, parser_func):
-    """Generic RSS fetcher"""
     session = get_scraping_session()
     try:
         r = session.get(url, timeout=25)
@@ -785,122 +818,76 @@ def fetch_rss(url, source_name, parser_func):
     finally:
         session.close()
 
-def fetch_jikan_safe():
-    """Fetches news for Top 5 Airing Anime via Jikan API"""
-    session = get_scraping_session()
-    items = []
+# Telegraph posting
+def create_telegraph_article(item: NewsItem):
+    """
+    Create a Telegraph article from NewsItem
+    Returns Telegraph URL or None
+    """
     try:
-        top_url = f"{JIKAN_BASE}/top/anime?filter=airing&limit=5"
-        r = session.get(top_url, timeout=15)
-        r.raise_for_status()
-        data = r.json().get("data", [])
+        # Extract full content
+        full_content = extract_full_article_content(item.article_url, item.source)
         
-        today = now_local().date()
-        yesterday = today - timedelta(days=1)
+        if not full_content or not full_content['html']:
+            logging.debug(f"No content extracted for {item.title}")
+            return None
         
-        for anime in data:
-            if not circuit_breaker.can_call("MAL"): break
+        # Build Telegraph content
+        telegraph_html = []
+        
+        # Add featured image if available
+        main_image = item.image_url or (full_content['images'][0] if full_content['images'] else None)
+        if main_image:
+            telegraph_html.append(f'<img src="{main_image}">')
+        
+        # Add content
+        telegraph_html.append(full_content['html'])
+        
+        # Add source attribution at the end
+        source_name = SOURCE_LABEL.get(item.source, item.source)
+        telegraph_html.append('<hr>')
+        telegraph_html.append(f'<p><strong>📍 Source:</strong> {source_name}</p>')
+        
+        if item.category:
+            telegraph_html.append(f'<p><strong>🏷️ Category:</strong> {item.category}</p>')
+        
+        if item.publish_date:
+            dt_str = item.publish_date.strftime("%B %d, %Y at %I:%M %p IST")
+            telegraph_html.append(f'<p><strong>📅 Published:</strong> {dt_str}</p>')
+        
+        telegraph_html.append(f'<p><a href="{item.article_url}">📍 Read Original Article</a></p>')
+        
+        # Create Telegraph page
+        content_html = '\n'.join(telegraph_html)
+        
+        result = telegraph.create_page(
+            title=item.title[:256],
+            content=content_html,
+            author_name=source_name,
+            author_url=item.article_url
+        )
+        
+        if result and result.get('url'):
+            item.telegraph_url = result['url']
+            logging.info(f"[OK] Telegraph article created: {result['url']}")
+            return result['url']
+        else:
+            return None
             
-            anime_id = anime.get("mal_id")
-            anime_title = anime.get("title")
-            if not anime_id: continue
-            
-            time.sleep(1.5)
-            news_url = f"{JIKAN_BASE}/anime/{anime_id}/news"
-            try:
-                nr = session.get(news_url, timeout=15)
-                nr.raise_for_status()
-                news_data = nr.json().get("data", [])
-                
-                for n in news_data:
-                    date_str = n.get("date")
-                    if date_str:
-                        try:
-                            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-                            n_date = dt.astimezone(local_tz).date()
-                            
-                            # STRICT: Only today or yesterday
-                            if not DEBUG_MODE and n_date not in [today, yesterday]:
-                                continue
-                        except Exception:
-                            continue
-
-                    title = n.get("title")
-                    url = n.get("url")
-                    image = n.get("images", {}).get("jpg", {}).get("large_image_url")
-                    excerpt = n.get("excerpt", "News about " + anime_title)
-                    
-                    item = NewsItem(
-                        title=f"{anime_title}: {title}",
-                        source="MAL",
-                        article_url=url,
-                        image_url=image,
-                        summary_text=excerpt
-                    )
-                    items.append(item)
-            except Exception as e:
-                logging.error(f"Failed to fetch MAL news for {anime_id}: {e}")
-                
-        circuit_breaker.record_success("MAL")
     except Exception as e:
-        logging.error(f"Jikan global failure: {e}")
-        circuit_breaker.record_failure("MAL")
-    finally:
-        session.close()
-    
-    return items
+        logging.error(f"Telegraph article creation failed: {e}")
+        return None
 
-def fetch_details_concurrently(items):
-    """Fetch detailed content for items"""
-    def get_details(item: NewsItem):
-        if not item.article_url or not item.article_url.startswith("http"):
-            return item
-        
-        if "news.google.com" in item.article_url:
-            return item
-
-        session = get_scraping_session()
-        try:
-            r = session.get(item.article_url, timeout=15)
-            s = BeautifulSoup(r.text, "html.parser")
-            
-            # OpenGraph image
-            og_img = s.find("meta", property="og:image")
-            if og_img and og_img.get("content"):
-                item.image_url = og_img["content"]
-
-            # Summary extraction
-            div = s.find("div", class_="meat") or s.find("div", class_="content")
-            if div and not item.summary_text:
-                txt = clean_text_extractor(div)
-                item.summary_text = txt[:350] + "..." if len(txt) > 350 else txt
-        except Exception as e:
-            logging.debug(f"Details fetch failed for {item.article_url}: {e}")
-        finally: 
-            session.close()
-        return item
-
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        ex.map(get_details, items)
-    
-    return items
-
-# --- 8. TELEGRAM SENDER WITH PROPER CHANNEL ROUTING ---
+# Telegram posting
 def get_target_channel(source):
-    """
-    CRITICAL: Determine which channel to send the post to based on source
-    This fixes the issue where world news was posting to anime channel
-    """
-    # WORLD NEWS SOURCES -> WORLD_NEWS_CHANNEL_ID (STRICT)
     if source in WORLD_NEWS_SOURCES:
         if WORLD_NEWS_CHANNEL_ID:
             safe_log("info", f"Routing {source} to WORLD_NEWS_CHANNEL")
             return WORLD_NEWS_CHANNEL_ID
         else:
-            logging.warning(f"⚠️ WORLD_NEWS_CHANNEL_ID not set! {source} going to fallback")
+            logging.warning(f"[WARN] WORLD_NEWS_CHANNEL_ID not set! {source} going to fallback")
             return CHAT_ID or ANIME_NEWS_CHANNEL_ID
     
-    # ANIME NEWS SOURCES (includes DC news) -> ANIME_NEWS_CHANNEL_ID
     if source in ANIME_NEWS_SOURCES:
         if ANIME_NEWS_CHANNEL_ID:
             safe_log("info", f"Routing {source} to ANIME_NEWS_CHANNEL")
@@ -908,114 +895,90 @@ def get_target_channel(source):
         else:
             return CHAT_ID or ANIME_NEWS_CHANNEL_ID
     
-    # Default fallback
-    logging.warning(f"⚠️ Unknown source {source}, using fallback channel")
+    logging.warning(f"[WARN] Unknown source {source}, using fallback channel")
     return CHAT_ID or ANIME_NEWS_CHANNEL_ID
 
-def format_world_news_html(item: NewsItem):
+def format_news_message(item: NewsItem):
     """
-    SPECIAL HTML/JSON FORMAT FOR WORLD NEWS
-    Enhanced formatting with more structure
+    Format news message with Telegraph link (unified format for both anime and world news)
     """
-    title = html.escape(str(item.title or "No Title"), quote=False)
-    summary = html.escape(str(item.summary_text or "No summary available"), quote=False)
-    link = str(item.article_url or "")
     source_name = SOURCE_LABEL.get(item.source, item.source)
+    title = html.escape(str(item.title or "No Title"), quote=False)
+    summary = html.escape(str(item.summary_text or "Read the full article on Telegraph for complete details."), quote=False)
     
-    # Build structured HTML message
+    # Emoji based on source type
+    if item.source in WORLD_NEWS_SOURCES:
+        header_emoji = "🌍"
+        header_text = "WORLD NEWS"
+    else:
+        header_emoji = "📰"
+        header_text = "ANIME NEWS"
+    
+    # Build message
     msg_parts = [
-        f"🌍 <b>WORLD NEWS</b>",
-        f"",  # Empty line
+        f"{header_emoji} <b>{header_text}</b>",
+        "",
         f"<b>{title}</b>",
-        f"",
-        f"{summary}",
-        f"",
-        f"━━━━━━━━━━━━━━━━━",
+        "",
+        f"<i>{summary}</i>",
+        "",
+        "━━━━━━━━━━━━━━━━━",
         f"📰 <b>Source:</b> {source_name}",
     ]
     
-    # Add category if available
     if item.category:
         cat = html.escape(str(item.category), quote=False)
         msg_parts.append(f"🏷️ <b>Category:</b> {cat}")
     
-    # Add publish date if available
     if item.publish_date:
         dt_str = item.publish_date.strftime("%B %d, %Y at %I:%M %p IST")
         msg_parts.append(f"📅 <b>Published:</b> {dt_str}")
     
-    # Add link
-    if link and link.startswith('http'):
-        safe_link = html.escape(link, quote=True)
-        msg_parts.append(f"")
-        msg_parts.append(f"🔗 <a href='{safe_link}'>Read Full Article</a>")
+    msg_parts.append("")
+    
+    # Add Telegraph link if available (primary CTA)
+    if item.telegraph_url:
+        msg_parts.append(f"📖 <a href='{item.telegraph_url}'>Read Full Article on Telegraph</a>")
+        msg_parts.append(f"📍 <a href='{html.escape(item.article_url, quote=True)}'>Original Source</a>")
+    else:
+        # Fallback to original link
+        msg_parts.append(f"📍 <a href='{html.escape(item.article_url, quote=True)}'>Read Full Article</a>")
     
     return "\n".join(msg_parts)
 
-def format_anime_news(item: NewsItem):
-    """Standard format for anime news"""
-    source_configs = {
-        "ANN": { "emoji": "📰", "tag": "ANIME NEWS", "color": "🔴" },
-        "ANN_DC": { "emoji": "🕵️", "tag": "CONAN NEWS", "color": "🔵" },
-        "DCW": { "emoji": "📚", "tag": "WIKI UPDATE", "color": "🟢" },
-        "TMS": { "emoji": "🎬", "tag": "TMS UPDATE", "color": "🟡" },
-        "FANDOM": { "emoji": "🌐", "tag": "FANDOM NEWS", "color": "🟣" },
-        "MAL": { "emoji": "📈", "tag": "MAL TRENDING", "color": "🔵" },
-        "CR": { "emoji": "🟠", "tag": "CRUNCHYROLL", "color": "🟠" },
-        "AC": { "emoji": "🏯", "tag": "ANIME CORNER", "color": "🔴" },
-        "HONEY": { "emoji": "🍯", "tag": "HONEY'S ANIME", "color": "🟡" },
-        "ANI": { "emoji": "🇮🇳", "tag": "ANIME INDIA", "color": "🟠" },
-    }
-    
-    config = source_configs.get(item.source, {
-        "emoji": "📰", "tag": "NEWS UPDATE", "color": "⚪"
-    })
-    
-    title = html.escape(str(item.title or "No Title"), quote=False)
-    summary = html.escape(str(item.summary_text or "No summary available"), quote=False)
-    link = str(item.article_url or "")
-    source_name = SOURCE_LABEL.get(item.source, item.source)
-    
-    components = [
-        f"{config['emoji']} <b>{config['tag']}</b> {config['color']}",
-        f"<b>{title}</b>",
-        f"<i>{summary}</i>",
-        f"📊 <b>Source:</b> {source_name}",
-        f"📢 <b>Channel:</b> @Detective_Conan_News"
-    ]
-    
-    if link and link.startswith('http'):
-        safe_link = html.escape(link, quote=True)
-        components.append(f"🔗 <a href='{safe_link}'>Read Full Article</a>")
-    
-    return "\n\n".join(components)
-
 def send_to_telegram(item: NewsItem, slot, posted_set):
     """
-    Send news to Telegram with proper channel routing and spam detection
+    Send news to Telegram with Telegraph integration
     """
-    # STRONG SPAM DETECTION
+    # Spam detection
     if is_duplicate(item.title, item.article_url, posted_set):
-        logging.info(f"🚫 Skipping duplicate: {item.title[:50]}")
+        logging.info(f"[BLOCKED] Skipping duplicate: {item.title[:50]}")
         return False
 
-    # RECORD ATTEMPT FIRST
+    # Record attempt
     if not record_post(item.title, item.source, slot, posted_set, item.category, status='attempted'):
-        logging.warning("⚠️ Failed to record attempt, skipping to avoid spam")
+        logging.warning("[WARN] Failed to record attempt, skipping to avoid spam")
         return False
     
-    # Get correct channel based on source
+    # Create Telegraph article (with rate limiting consideration)
+    try:
+        telegraph_url = create_telegraph_article(item)
+        if telegraph_url:
+            item.telegraph_url = telegraph_url
+            time.sleep(0.5)  # Brief delay after Telegraph creation
+    except Exception as e:
+        logging.warning(f"Telegraph creation failed, will use original link: {e}")
+        item.telegraph_url = None
+    
+    # Get target channel
     target_chat_id = get_target_channel(item.source)
     
-    # Format message based on channel type
-    if item.source in WORLD_NEWS_SOURCES:
-        msg = format_world_news_html(item)
-    else:
-        msg = format_anime_news(item)
+    # Format message
+    msg = format_news_message(item)
     
     success = False
     
-    # Try sending with photo first
+    # Try with image first
     if item.image_url:
         try:
             sess = get_fresh_telegram_session()
@@ -1036,14 +999,14 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
                 success = True
             elif response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", 30))
-                logging.warning(f"⏳ Rate limited. Sleeping {retry_after}s")
+                logging.warning(f"[WAIT] Rate limited. Sleeping {retry_after}s")
                 time.sleep(retry_after)
             else:
-                logging.warning(f"⚠️ Image send failed: {response.text}")
+                logging.warning(f"[WARN] Image send failed: {response.text}")
         except Exception as e:
-            logging.warning(f"⚠️ Image send failed for {item.title}: {e}")
+            logging.warning(f"[WARN] Image send failed for {item.title}: {e}")
 
-    # Fallback to text-only
+    # Fallback to text
     if not success:
         try:
             sess = get_fresh_telegram_session()
@@ -1052,7 +1015,8 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
                 json={
                     "chat_id": target_chat_id, 
                     "text": msg, 
-                    "parse_mode": "HTML"
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": False  # Show preview for Telegraph links
                 },
                 timeout=20
             )
@@ -1065,7 +1029,8 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
                     json={
                         "chat_id": target_chat_id, 
                         "text": msg, 
-                        "parse_mode": "HTML"
+                        "parse_mode": "HTML",
+                        "disable_web_page_preview": False
                     },
                     timeout=20
                 )
@@ -1075,16 +1040,28 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
                 safe_log("info", f"Sent (Text) to {target_chat_id}: {item.title[:50]}")
                 success = True
             else:
-                logging.error(f"❌ Send failed: {response.text}")
+                logging.error(f"[ERROR] Send failed: {response.text}")
                 
         except Exception as e:
-            logging.error(f"❌ Send attempt failed: {e}")
+            logging.error(f"[ERROR] Send attempt failed: {e}")
             
     if success:
-        # UPDATE STATUS TO SENT
+        # Update status
         update_post_status(item.title, 'sent')
         
-        # Update in-memory set
+        # Update record with Telegraph URL if created
+        if item.telegraph_url and supabase:
+            try:
+                key = normalize_title(item.title)
+                date_obj = str(now_local().date())
+                supabase.table("posted_news")\
+                    .update({"article_url": item.telegraph_url})\
+                    .eq("normalized_title", key)\
+                    .eq("posted_date", date_obj)\
+                    .execute()
+            except:
+                pass
+        
         key = normalize_title(item.title)
         posted_set.add(key)
         return True
@@ -1092,7 +1069,6 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
     return False
 
 def send_admin_report(status, posts_sent, source_counts, error=None):
-    """Send comprehensive report to admin"""
     if not ADMIN_ID: 
         return
 
@@ -1100,11 +1076,9 @@ def send_admin_report(status, posts_sent, source_counts, error=None):
     date_str = str(dt.date())
     slot = dt.hour // 4
     
-    # Calculate channel distribution
     anime_posts = sum(count for source, count in source_counts.items() if source in ANIME_NEWS_SOURCES)
     world_posts = sum(count for source, count in source_counts.items() if source in WORLD_NEWS_SOURCES)
     
-    # Fetch stats
     daily_total = 0
     all_time_total = 0
     if supabase:
@@ -1117,37 +1091,35 @@ def send_admin_report(status, posts_sent, source_counts, error=None):
         except: 
             pass
         
-    # Health warnings
     health_warnings = []
     if error:
-        health_warnings.append(f"⚠️ <b>Error:</b> {html.escape(str(error)[:100], quote=False)}")
+        health_warnings.append(f"[WARN] <b>Error:</b> {html.escape(str(error)[:100], quote=False)}")
     
     for source, count in circuit_breaker.failure_counts.items():
         if count >= circuit_breaker.failure_threshold:
-            health_warnings.append(f"⚠️ <b>Source Down:</b> {source} ({count} failures)")
+            health_warnings.append(f"[WARN] <b>Source Down:</b> {source} ({count} failures)")
     
-    health_status = "✅ <b>All Systems Operational</b>" if not health_warnings else "\n".join(health_warnings)
+    health_status = "[OK] <b>All Systems Operational</b>" if not health_warnings else "\n".join(health_warnings)
 
-    # Format source stats
     source_stats = "\n".join([f"• <b>{k}:</b> {v}" for k, v in source_counts.items()])
     if not source_stats: source_stats = "• No new posts this cycle"
 
     report_msg = (
-        f"🤖 <b>News Bot Report</b>\n"
-        f"📅 {date_str} | 🕒 Slot {slot} | ⏰ {dt.strftime('%I:%M %p IST')}\n\n"
+        f"[BOT] <b>News Bot Report</b>\n"
+        f"[DATE] {date_str} | [SLOT] Slot {slot} | [TIME] {dt.strftime('%I:%M %p IST')}\n\n"
         
-        f"<b>📊 This Cycle</b>\n"
+        f"<b>[STATS] This Cycle</b>\n"
         f"• Status: {status.upper()}\n"
         f"• Posts Sent: {posts_sent}\n"
         f"• Anime News: {anime_posts}\n"
         f"• World News: {world_posts}\n\n"
         
-        f"<b>📈 Today's Total: {daily_total}</b>\n"
-        f"<b>🏆 All-Time: {all_time_total}</b>\n\n"
+        f"<b>[TOTAL] Today's Total: {daily_total}</b>\n"
+        f"<b>[ALL] All-Time: {all_time_total}</b>\n\n"
         
-        f"<b>📰 Source Breakdown</b>\n{source_stats}\n\n"
+        f"<b>[SOURCE] Source Breakdown</b>\n{source_stats}\n\n"
         
-        f"<b>🏥 System Health</b>\n{health_status}"
+        f"<b>[HEALTH] System Health</b>\n{health_status}"
     )
 
     sess = get_fresh_telegram_session()
@@ -1163,79 +1135,44 @@ def send_admin_report(status, posts_sent, source_counts, error=None):
         )
         safe_log("info", "Admin report sent")
     except Exception as e:
-        logging.error(f"❌ Failed to send admin report: {e}")
+        logging.error(f"[ERROR] Failed to send admin report: {e}")
     finally:
         sess.close()
 
-# --- 9. MAIN EXECUTION ---
+# Main execution
 def run_once():
     """
-    Single execution entry point for 4-hour schedule
-    Implements: 
-    - Strict date filtering (only today/yesterday)
-    - Strong spam detection
-    - Proper channel routing
-    - Midnight reset handling
+    Main execution with Telegraph integration
     """
     dt = now_local()
     date_obj = dt.date()
     slot = dt.hour // 4
     
     safe_log("info", f"\n{'='*60}")
-    safe_log("info", f"STARTING NEWS BOT RUN")
+    safe_log("info", f"STARTING NEWS BOT RUN (Telegraph Enabled)")
     safe_log("info", f"Date: {date_obj} | Slot: {slot} | Time: {dt.strftime('%I:%M %p IST')}")
     safe_log("info", f"{'='*60}\n")
     
-    # Check if we should reset (new day)
     if should_reset_daily_tracking():
         safe_log("info", "NEW DAY DETECTED - Resetting daily tracking")
     
-    # Initialize
     initialize_bot_stats()
     ensure_daily_row(date_obj)
     
-    # Load posted titles (last 7 days for strong deduplication)
     posted_set = load_posted_titles(date_obj)
     all_items = []
     
-    # Fetch from all sources
     safe_log("info", "\nFETCHING NEWS FROM SOURCES...")
     
-    # ANN
-    if circuit_breaker.can_call("ANN"):
-        logging.info("  → Fetching ANN...")
-        ann_items = fetch_generic(BASE_URL, "ANN", parse_ann)
-        all_items.extend(ann_items)
-        logging.info(f"    ✓ Found {len(ann_items)} items")
-    
-    # ANN DC
-    if circuit_breaker.can_call("ANN_DC"):
-        logging.info("  → Fetching ANN DC...")
-        ann_dc_items = fetch_generic(BASE_URL_ANN_DC, "ANN_DC", parse_ann_dc)
-        all_items.extend(ann_dc_items)
-        logging.info(f"    ✓ Found {len(ann_dc_items)} items")
-
-    # RSS FEEDS (Anime + World News)
+    # Fetch from RSS feeds
     for code, url in RSS_FEEDS.items():
         if circuit_breaker.can_call(code):
-            logging.info(f"  → Fetching {code}...")
+            logging.info(f"  -> Fetching {code}...")
             items = fetch_rss(url, code, lambda s: parse_rss_robust(s, code))
             all_items.extend(items)
-            logging.info(f"    ✓ Found {len(items)} items")
+            logging.info(f"    [OK] Found {len(items)} items")
 
-    # MAL (Jikan)
-    if circuit_breaker.can_call("MAL"):
-        logging.info("  → Fetching MAL...")
-        mal_items = fetch_jikan_safe()
-        all_items.extend(mal_items)
-        logging.info(f"    ✓ Found {len(mal_items)} items")
-
-    # Enrich data
-    safe_log("info", f"\nEnriching {len(all_items)} items with details...")
-    fetch_details_concurrently(all_items)
-
-    # Post to Telegram
-    safe_log("info", "\nPOSTING TO TELEGRAM...")
+    safe_log("info", f"\nPOSTING TO TELEGRAM (with Telegraph)...")
     sent_count = 0
     source_counts = defaultdict(int)
     
@@ -1243,17 +1180,15 @@ def run_once():
         if not item.title: 
             continue
         
-        # Verify item is from today or yesterday
         if item.publish_date and not is_today_or_yesterday(item.publish_date):
-            logging.debug(f"⏭️ Skipping old news: {item.title[:50]}")
+            logging.debug(f"[SKIP] Skipping old news: {item.title[:50]}")
             continue
         
         if send_to_telegram(item, slot, posted_set):
             sent_count += 1
             source_counts[item.source] += 1
-            time.sleep(1.0)  # Rate limit protection
+            time.sleep(2.0)  # Increased delay for Telegraph + Telegram posting
 
-    # Report
     safe_log("info", f"\n{'='*60}")
     safe_log("info", f"RUN COMPLETE - Sent: {sent_count} posts")
     safe_log("info", f"{'='*60}\n")
