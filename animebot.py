@@ -822,7 +822,7 @@ def fetch_rss(url, source_name, parser_func):
 # Telegraph posting
 def create_telegraph_article(item: NewsItem):
     """
-    Create a Telegraph article from NewsItem
+    Create a Telegraph article from NewsItem with enhanced styling
     Returns Telegraph URL or None
     """
     try:
@@ -836,27 +836,38 @@ def create_telegraph_article(item: NewsItem):
         # Build Telegraph content
         telegraph_html = []
         
-        # Add featured image if available
+        # 1. Feature Image (Top, Centered)
         main_image = item.image_url or (full_content['images'][0] if full_content['images'] else None)
         if main_image:
-            telegraph_html.append(f'<img src="{main_image}">')
+            telegraph_html.append(f'<figure><img src="{main_image}"><figcaption>{item.title}</figcaption></figure>')
         
-        # Add content
+        # 2. Stylish Summary Block
+        if item.summary_text and len(item.summary_text) > 20:
+            telegraph_html.append('<blockquote>')
+            telegraph_html.append(f'<b>📝 Quick Summary:</b><br>{item.summary_text}')
+            telegraph_html.append('</blockquote>')
+            telegraph_html.append('<hr>')
+        
+        # 3. Main Content
         telegraph_html.append(full_content['html'])
         
-        # Add source attribution at the end
+        # 4. Footer Section
         source_name = SOURCE_LABEL.get(item.source, item.source)
+        dt_str = item.publish_date.strftime("%B %d, %Y") if item.publish_date else "Just Now"
+        
         telegraph_html.append('<hr>')
-        telegraph_html.append(f'<p><strong>📍 Source:</strong> {source_name}</p>')
+        telegraph_html.append('<h4>📌 Source details</h4>')
         
+        footer_info = []
+        footer_info.append(f'<b>📰 Source:</b> {source_name}')
         if item.category:
-            telegraph_html.append(f'<p><strong>🏷️ Category:</strong> {item.category}</p>')
+            footer_info.append(f'<b>🏷️ Category:</b> {item.category}')
+        footer_info.append(f'<b>📅 Published:</b> {dt_str}')
         
-        if item.publish_date:
-            dt_str = item.publish_date.strftime("%B %d, %Y at %I:%M %p IST")
-            telegraph_html.append(f'<p><strong>📅 Published:</strong> {dt_str}</p>')
+        telegraph_html.append(f"<p>{' | '.join(footer_info)}</p>")
         
-        telegraph_html.append(f'<p><a href="{item.article_url}">📍 Read Original Article</a></p>')
+        # 5. Original Link Button-style
+        telegraph_html.append(f'<p><a href="{item.article_url}">🔗 <b>Click here to view original article</b></a></p>')
         
         # Create Telegraph page
         content_html = '\n'.join(telegraph_html)
@@ -864,7 +875,7 @@ def create_telegraph_article(item: NewsItem):
         result = telegraph.create_page(
             title=item.title[:256],
             content=content_html,
-            author_name=source_name,
+            author_name=f"{source_name} (via NewsBot)",
             author_url=item.article_url
         )
         
@@ -901,49 +912,82 @@ def get_target_channel(source):
 
 def format_news_message(item: NewsItem):
     """
-    Format news message with Telegraph link (unified format for both anime and world news)
+    Format news message with distinct styles for Anime and World news
     """
     source_name = SOURCE_LABEL.get(item.source, item.source)
     title = html.escape(str(item.title or "No Title"), quote=False)
-    summary = html.escape(str(item.summary_text or "Read the full article on Telegraph for complete details."), quote=False)
+    summary = html.escape(str(item.summary_text or "Check out the full story below!"), quote=False)
     
-    # Emoji based on source type
-    if item.source in WORLD_NEWS_SOURCES:
-        header_emoji = "🌍"
-        header_text = "WORLD NEWS"
+    # --- ANIME NEWS STYLE ---
+    if item.source not in WORLD_NEWS_SOURCES:
+        # Header
+        header = "🌸 <b>ANIME NEWS FLASH</b> 🌸"
+        
+        # Body
+        msg_parts = [
+            header,
+            "",
+            f"🗞️ <b>{title}</b>",
+            "",
+            f"✨ <i>{summary}</i>",
+            "",
+            "🌸━━━━━━━━━━━━━━━━━━━━🌸",
+        ]
+        
+        # Metadata line
+        meta_parts = []
+        meta_parts.append(f"📡 <b>Source:</b> {source_name}")
+        if item.category:
+            cat = html.escape(str(item.category), quote=False)
+            meta_parts.append(f"🏷️ <b>Category:</b> {cat}")
+            
+        msg_parts.append(" | ".join(meta_parts))
+        
+        # Date
+        if item.publish_date:
+            dt_str = item.publish_date.strftime("%b %d, %I:%M %p")
+            msg_parts.append(f"🕒 {dt_str}")
+            
+        msg_parts.append("")
+        
+        # Links / CTA
+        if item.telegraph_url:
+            msg_parts.append(f"👉 <a href='{item.telegraph_url}'><b>READ FULL STORY HERE</b></a> 👈")
+            msg_parts.append(f"🔗 <a href='{html.escape(item.article_url, quote=True)}'>Original Source</a>")
+        else:
+            msg_parts.append(f"👉 <a href='{html.escape(item.article_url, quote=True)}'><b>READ FULL STORY</b></a>")
+
+    # --- WORLD NEWS STYLE ---
     else:
-        header_emoji = "📰"
-        header_text = "ANIME NEWS"
-    
-    # Build message
-    msg_parts = [
-        f"{header_emoji} <b>{header_text}</b>",
-        "",
-        f"<b>{title}</b>",
-        "",
-        f"<i>{summary}</i>",
-        "",
-        "━━━━━━━━━━━━━━━━━",
-        f"📰 <b>Source:</b> {source_name}",
-    ]
-    
-    if item.category:
-        cat = html.escape(str(item.category), quote=False)
-        msg_parts.append(f"🏷️ <b>Category:</b> {cat}")
-    
-    if item.publish_date:
-        dt_str = item.publish_date.strftime("%B %d, %Y at %I:%M %p IST")
-        msg_parts.append(f"📅 <b>Published:</b> {dt_str}")
-    
-    msg_parts.append("")
-    
-    # Add Telegraph link if available (primary CTA)
-    if item.telegraph_url:
-        msg_parts.append(f"📖 <a href='{item.telegraph_url}'>Read Full Article on Telegraph</a>")
-        msg_parts.append(f"📍 <a href='{html.escape(item.article_url, quote=True)}'>Original Source</a>")
-    else:
-        # Fallback to original link
-        msg_parts.append(f"📍 <a href='{html.escape(item.article_url, quote=True)}'>Read Full Article</a>")
+        # Header
+        header = "🌍 <b>GLOBAL HEADLINES</b> 🌍"
+        
+        # Body
+        msg_parts = [
+            header,
+            "",
+            f"📰 <b>{title}</b>",
+            "",
+            f"💬 <i>{summary}</i>",
+            "",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        ]
+        
+        # Metadata
+        msg_parts.append(f"🏛️ <b>Source:</b> {source_name}")
+        
+        if item.publish_date:
+            dt_str = item.publish_date.strftime("%B %d, %Y • %I:%M %p")
+            msg_parts.append(f"📅 {dt_str}")
+            
+        msg_parts.append("")
+        
+        # Links / CTA
+        if item.telegraph_url:
+            msg_parts.append(f"📖 <a href='{item.telegraph_url}'><b>Read Detailed Coverage</b></a>")
+            msg_parts.append(f"🔗 <a href='{html.escape(item.article_url, quote=True)}'>Original Article Link</a>")
+        else:
+            msg_parts.append(f"🔗 <a href='{html.escape(item.article_url, quote=True)}'><b>Read Full Article</b></a>")
     
     return "\n".join(msg_parts)
 
