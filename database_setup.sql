@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS posted_news (
     normalized_title TEXT NOT NULL,
     full_title TEXT NOT NULL,
     article_url TEXT,
+    telegraph_url TEXT,
     posted_date DATE NOT NULL,
     posted_at TIMESTAMPTZ DEFAULT NOW(),
     source TEXT NOT NULL,
@@ -75,6 +76,12 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='posted_news' AND column_name='channel_type') THEN
         ALTER TABLE posted_news ADD COLUMN channel_type TEXT CHECK (channel_type IN ('anime', 'world'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='posted_news' AND column_name='article_url') THEN
+        ALTER TABLE posted_news ADD COLUMN article_url TEXT;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='posted_news' AND column_name='telegraph_url') THEN
+        ALTER TABLE posted_news ADD COLUMN telegraph_url TEXT;
     END IF;
     
     -- daily_stats updates

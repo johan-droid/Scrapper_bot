@@ -641,7 +641,7 @@ def load_posted_titles(date_obj):
         logging.error(f"Failed to load posted titles: {e}")
         return set()
 
-def record_post(title, source_code, slot, posted_titles_set, category=None, status='sent', telegraph_url=None):
+def record_post(title, source_code, article_url, slot, posted_titles_set, category=None, status='sent', telegraph_url=None):
     key = normalize_title(title)
     date_obj = now_local().date()
     
@@ -662,7 +662,8 @@ def record_post(title, source_code, slot, posted_titles_set, category=None, stat
                 "category": category,
                 "status": status,
                 "channel_type": channel_type,
-                "article_url": telegraph_url if telegraph_url else None
+                "article_url": article_url,
+                "telegraph_url": telegraph_url
             }
             supabase.table("posted_news").insert(payload).execute()
             
@@ -956,7 +957,7 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
         return False
 
     # Record attempt
-    if not record_post(item.title, item.source, slot, posted_set, item.category, status='attempted'):
+    if not record_post(item.title, item.source, item.article_url, slot, posted_set, item.category, status='attempted'):
         logging.warning("[WARN] Failed to record attempt, skipping to avoid spam")
         return False
     
@@ -1055,7 +1056,7 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
                 key = normalize_title(item.title)
                 date_obj = str(now_local().date())
                 supabase.table("posted_news")\
-                    .update({"article_url": item.telegraph_url})\
+                    .update({"telegraph_url": item.telegraph_url})\
                     .eq("normalized_title", key)\
                     .eq("posted_date", date_obj)\
                     .execute()
