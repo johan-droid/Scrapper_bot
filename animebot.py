@@ -617,6 +617,7 @@ def parse_ann_dc(html):
 def parse_rss_robust(soup, source_code):
     """
     Parses generic RSS/Atom feeds with STRICT date filtering
+    Enhanced to handle multiple link formats and website structure changes
     """
     items = []
     entries = soup.find_all(['item', 'entry'])
@@ -645,33 +646,100 @@ def parse_rss_robust(soup, source_code):
                     continue
             
             title_tag = entry.find(['title', 'dc:title'])
-            link_tag = entry.find(['link', 'guid', 'id']) 
+            if not title_tag:
+                continue
             
+            # ENHANCED LINK EXTRACTION - Multiple fallback methods
             link_str = None
+            
+            # Method 1: Try <link> tag with href attribute
+            link_tag = entry.find('link')
             if link_tag:
-                if link_tag.name == 'link' and link_tag.get('href'):
+                # Check for href attribute first
+                if link_tag.get('href'):
                     link_str = link_tag.get('href')
-                else:
+                # Check for text content
+                elif link_tag.text and link_tag.text.strip():
                     link_str = link_tag.text.strip()
             
-            if not title_tag or not link_str: continue
+            # Method 2: Try <guid> tag (often contains URL)
+            if not link_str:
+                guid_tag = entry.find('guid')
+                if guid_tag:
+                    guid_text = guid_tag.text.strip()
+                    # Check if guid is a valid URL
+                    if guid_text.startswith('http'):
+                        link_str = guid_text
+            
+            # Method 3: Try <id> tag (Atom feeds)
+            if not link_str:
+                id_tag = entry.find('id')
+                if id_tag:
+                    id_text = id_tag.text.strip()
+                    if id_text.startswith('http'):
+                        link_str = id_text
+            
+            # Method 4: Try alternate link (Atom feeds)
+            if not link_str:
+                alt_link = entry.find('link', {'rel': 'alternate'})
+                if alt_link and alt_link.get('href'):
+                    link_str = alt_link.get('href')
+            
+            # Method 5: Search in description/content for URLs
+            if not link_str:
+                desc = entry.find(['description', 'content', 'content:encoded'])
+                if desc:
+                    desc_text = desc.text
+                    # Extract first URL from description
+                    url_match = re.search(r'https?://[^\s<>"]+', desc_text)
+                    if url_match:
+                        link_str = url_match.group(0)
+            
+            # Skip if no link found
+            if not link_str or not link_str.startswith('http'):
+                logging.debug(f"No valid link found for: {title_tag.text[:50]}")
+                continue
 
-            # Image Handling
+            # Image Handling - Multiple methods
             image_url = None
-            media = entry.find(['media:content', 'enclosure'])
+            
+            # Method 1: media:content
+            media = entry.find('media:content')
             if media and media.get('url'):
                 image_url = media.get('url')
             
+            # Method 2: enclosure
+            if not image_url:
+                enclosure = entry.find('enclosure')
+                if enclosure and enclosure.get('url'):
+                    enc_type = enclosure.get('type', '')
+                    if 'image' in enc_type or not enc_type:
+                        image_url = enclosure.get('url')
+            
+            # Method 3: media:thumbnail
+            if not image_url:
+                thumb = entry.find('media:thumbnail')
+                if thumb and thumb.get('url'):
+                    image_url = thumb.get('url')
+            
+            # Method 4: Extract from content/description
             if not image_url:
                 content = entry.find(['content:encoded', 'content', 'description'])
                 if content:
                     c_soup = BeautifulSoup(content.text, "html.parser")
                     img = c_soup.find("img")
-                    if img: image_url = img.get("src")
+                    if img:
+                        image_url = img.get("src") or img.get("data-src")
             
-            # Summary
-            description = entry.find(['description', 'content', 'content:encoded', 'summary'])
-            summary_text = clean_text_extractor(description) if description else ""
+            # Summary - Enhanced extraction
+            summary_text = ""
+            description = entry.find(['description', 'summary', 'content', 'content:encoded'])
+            if description:
+                summary_text = clean_text_extractor(description)
+            
+            # If no summary, try to extract from title
+            if not summary_text or len(summary_text) < 20:
+                summary_text = f"Read more about: {title_tag.text.strip()}"
 
             # Category
             cat_tag = entry.find(['category', 'dc:subject'])
@@ -689,7 +757,8 @@ def parse_rss_robust(soup, source_code):
                 publish_date=datetime.combine(pub_date, datetime.min.time()).replace(tzinfo=local_tz) if pub_date else None
             )
             items.append(item)
-        except Exception: 
+        except Exception as e:
+            logging.debug(f"Failed to parse RSS entry: {e}")
             continue
     
     return items
