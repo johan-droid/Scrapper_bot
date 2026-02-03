@@ -29,5 +29,10 @@ WHERE id NOT IN (
     GROUP BY normalized_title
 );
 
--- Then add the constraint
-ALTER TABLE posted_news ADD CONSTRAINT unique_normalized_title UNIQUE (normalized_title);
+-- Then add the constraint safely
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'unique_normalized_title') THEN
+        ALTER TABLE posted_news ADD CONSTRAINT unique_normalized_title UNIQUE (normalized_title);
+    END IF;
+END $$;
