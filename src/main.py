@@ -51,9 +51,6 @@ def start_scheduler():
         safe_log("info", f"Scheduler started - Scraping every 4h, Pinging every 14m. Initial scrape scheduled at {run_date}")
 
 # 3. Start Components
-# Start the web server thread (for health checks locally or if run directly)
-keep_alive()
-
 # Start the scheduler
 start_scheduler()
 
@@ -70,6 +67,9 @@ except Exception:
 if __name__ == "__main__":
     # If run directly (not via Gunicorn), keep the main thread alive
     safe_log("info", "Running in manual mode...")
+    
+    # Start the web server thread (for health checks locally)
+    keep_alive()
     
     # Run once immediately for testing
     run_once()
