@@ -62,3 +62,26 @@ Since `app.json` is configured, you can use the "Deploy to Heroku" button if thi
 
 - **Self-Ping**: The bot includes a self-ping mechanism to keep the free Dyno alive (if relying on uptime). On Heroku, set `HEROKU_APP_NAME` config var to your app name (e.g., `your-app-name`) so the bot knows its own URL.
 - **Python Version**: The expected Python version is defined in `runtime.txt`.
+
+## Troubleshooting
+
+### "App not compatible with buildpack: heroku/nodejs"
+If you see this error, it means your Heroku app is incorrectly configured to use Node.js instead of Python. This can happen if Heroku failed to auto-detect the language or if it was previously set to Node.js.
+
+To fix this, run the following commands in your terminal:
+
+```bash
+# Clear existing buildpacks
+heroku buildpacks:clear
+
+# Set the buildpack to Python
+heroku buildpacks:set heroku/python
+
+# Verify the buildpack
+heroku buildpacks
+```
+
+Then push your code again:
+```bash
+git push heroku main
+```
