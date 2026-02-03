@@ -1,12 +1,16 @@
 from apscheduler.schedulers.background import BackgroundScheduler
-from .utils import setup_logging, safe_log, now_local, patch_socket_ipv4
-from .bot import run_once, send_admin_report
+from .utils import setup_logging, safe_log, patch_socket_ipv4
+from .bot import run_once
 from .keep_alive import keep_alive, app  # Import app for Gunicorn
 import time
-import signal
-import sys
+import requests
+import os
 
-# Scheduler setup
+# 1. Global Setup (Runs on Import)
+patch_socket_ipv4()
+setup_logging()
+
+# 2. Scheduler Setup
 scheduler = BackgroundScheduler()
 
 def scheduled_job():
@@ -16,29 +20,54 @@ def scheduled_job():
     except Exception as e:
         safe_log("error", f"Scheduled job failed: {e}", exc_info=True)
 
+def self_ping():
+    """Ping the service to keep it alive"""
+    try:
+        url = os.getenv("RENDER_EXTERNAL_URL")
+        if not url:
+            url = "http://127.0.0.1:10000"
+            
+        # Ping the keep-alive endpoint
+        requests.get(f"{url}/", timeout=10)
+        safe_log("info", f"Self-ping successful: {url}")
+    except Exception as e:
+        safe_log("error", f"Self-ping failed: {e}")
+
 def start_scheduler():
     if not scheduler.running:
-        scheduler.add_job(scheduled_job, 'interval', hours=4)
+        # Main job: Every 4 hours
+        scheduler.add_job(scheduled_job, 'interval', hours=4, id='scrape_job')
+        
+        # Keep-alive job: Every 14 minutes (Render sleeps after 15 mins of inactivity)
+        scheduler.add_job(self_ping, 'interval', minutes=14, id='ping_job')
+        
         scheduler.start()
-        safe_log("info", "Scheduler started - running every 4 hours")
+        safe_log("info", "Scheduler started - Scraping every 4h, Pinging every 14m")
+
+# 3. Start Components
+# Start the web server thread (for health checks locally or if run directly)
+keep_alive()
+
+# Start the scheduler
+start_scheduler()
+
+# 4. Initial Run (Non-blocking)
+# We don't want to block the import, so we can schedule the first run 
+# to happen shortly after startup if needed, or just rely on the interval.
+# For now, let's execute it once safely if not in a worker restart loop
+try:
+    # Check if we are in the main process
+    safe_log("info", "Application startup complete")
+except Exception:
+    pass
 
 if __name__ == "__main__":
-    patch_socket_ipv4()
-    setup_logging()
+    # If run directly (not via Gunicorn), keep the main thread alive
+    safe_log("info", "Running in manual mode...")
     
-    # Start web server in background thread (immediately for health checks)
-    keep_alive() 
-
-    # Start scheduler
-    start_scheduler()
+    # Run once immediately for testing
+    run_once()
     
-    # Run once immediately on startup
-    try:
-        run_once()
-    except Exception as e:
-        safe_log("error", f"Initial run failed: {e}", exc_info=True) 
-    
-    # Keep main thread alive
     try:
         while True:
             time.sleep(1)
