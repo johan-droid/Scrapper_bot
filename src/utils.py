@@ -4,6 +4,7 @@ import uuid
 import logging
 import pytz
 import re
+import html
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 
@@ -109,17 +110,26 @@ def clean_text_extractor(html_text_or_element, limit=350):
         soup = html_text_or_element
     else:
         raw_str = str(html_text_or_element)
+        # Check if it looks like HTML, otherwise just return it
         if "<" in raw_str and ">" in raw_str:
              soup = BeautifulSoup(raw_str, "html.parser")
         else:
              return raw_str[:limit]
 
-    for script in soup(["script", "style", "header", "footer"]):
-        script.decompose()
+    # Remove all script, style, header, footer, AND standard HTML containers that might clutter text
+    for tag in soup(["script", "style", "header", "footer", "nav", "form", "iframe", "img", "figure"]):
+        tag.decompose()
         
     text = soup.get_text(separator=" ")
+    
+    # URL removal
     text = re.sub(r'http\S+', '', text)
+    
+    # normalize whitespace
     text = re.sub(r'\s+', ' ', text).strip()
+    
+    # decode entities
+    text = html.unescape(text) # Ensure standard library import if needed, or stick to simple replacements
     text = text.replace('â€™', "'").replace('â€"', "—").replace('&nbsp;', ' ')
     
     if len(text) > limit:

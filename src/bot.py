@@ -11,7 +11,7 @@ from src.config import (
     ADMIN_ID, ANIME_NEWS_SOURCES, WORLD_NEWS_SOURCES, SOURCE_LABEL, 
     RSS_FEEDS, TELEGRAPH_TOKEN, DISABLE_PREVIEW
 )
-from src.utils import safe_log, now_local, circuit_breaker, is_today_or_yesterday, should_reset_daily_tracking
+from src.utils import safe_log, now_local, circuit_breaker, is_today_or_yesterday, should_reset_daily_tracking, clean_text_extractor
 from src.database import (
     supabase, initialize_bot_stats, ensure_daily_row, load_posted_titles, 
     record_post, update_post_status, increment_post_counters, 
@@ -131,7 +131,11 @@ def format_news_message(item: NewsItem):
     """
     source_name = SOURCE_LABEL.get(item.source, item.source)
     title = html.escape(str(item.title or "No Title"), quote=False)
-    summary = html.escape(str(item.summary_text or "Check out the full story below!"), quote=False)
+    
+    # Clean the summary text to remove any HTML tags (imgs, divs, etc)
+    raw_summary = str(item.summary_text or "Check out the full story below!")
+    clean_summary = clean_text_extractor(raw_summary, limit=350)
+    summary = html.escape(clean_summary, quote=False)
     
     # --- ANIME NEWS STYLE ---
     if item.source not in WORLD_NEWS_SOURCES:
