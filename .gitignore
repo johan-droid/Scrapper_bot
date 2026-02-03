@@ -208,3 +208,8 @@ temp_uploads/
 telegram_cache/
 bot_sessions/
 user_data.json
+
+# Utility Scripts
+src/diagnose_telegram.py
+sql/reset_today_posts.sql
+
