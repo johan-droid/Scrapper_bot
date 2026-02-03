@@ -1,0 +1,53 @@
+{
+  "name": "Scrapper Bot",
+  "description": "A Telegram bot that scrapes news from various sources and posts them to channels.",
+  "keywords": ["telegram", "bot", "python", "scraper"],
+  "env": {
+    "BOT_TOKEN": {
+      "description": "Your Telegram Bot Token",
+      "required": true
+    },
+    "CHAT_ID": {
+      "description": "Main Telegram Chat ID",
+      "required": true
+    },
+    "REDDIT_CHANNEL_ID": {
+      "description": "Channel ID for Reddit news",
+      "required": true
+    },
+    "ANIME_NEWS_CHANNEL_ID": {
+      "description": "Channel ID for Anime news",
+      "required": true
+    },
+    "WORLD_NEWS_CHANNEL_ID": {
+      "description": "Channel ID for World news",
+      "required": true
+    },
+    "ADMIN_ID": {
+      "description": "Your Telegram User ID for admin commands",
+      "required": true
+    },
+    "SUPABASE_URL": {
+      "description": "URL of your Supabase project",
+      "required": false
+    },
+    "SUPABASE_KEY": {
+      "description": "Anon key for your Supabase project",
+      "required": false
+    },
+    "DEBUG_MODE": {
+      "description": "Enable debug logging",
+      "value": "False",
+      "required": false
+    },
+    "EXTERNAL_URL": {
+      "description": "URL of this app (e.g. https://your-app.herokuapp.com) for self-pinging. If using Heroku, HEROKU_APP_NAME can be used instead.",
+      "required": false
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ]
+}

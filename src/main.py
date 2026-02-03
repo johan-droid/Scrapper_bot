@@ -23,7 +23,11 @@ def scheduled_job():
 def self_ping():
     """Ping the service to keep it alive"""
     try:
-        url = os.getenv("RENDER_EXTERNAL_URL")
+        url = os.getenv("EXTERNAL_URL") or os.getenv("RENDER_EXTERNAL_URL")
+        # Support for Heroku (if HEROKU_APP_NAME is set, construct the URL)
+        if not url and os.getenv("HEROKU_APP_NAME"):
+            url = f"https://{os.getenv('HEROKU_APP_NAME')}.herokuapp.com"
+            
         if not url:
             url = "http://127.0.0.1:10000"
             
