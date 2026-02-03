@@ -33,6 +33,8 @@ def self_ping():
     except Exception as e:
         safe_log("error", f"Self-ping failed: {e}")
 
+from datetime import datetime, timedelta
+
 def start_scheduler():
     if not scheduler.running:
         # Main job: Every 4 hours
@@ -41,8 +43,12 @@ def start_scheduler():
         # Keep-alive job: Every 14 minutes (Render sleeps after 15 mins of inactivity)
         scheduler.add_job(self_ping, 'interval', minutes=14, id='ping_job')
         
+        # Initial run: 20 seconds from now (to execute immediately after deployment)
+        run_date = datetime.now() + timedelta(seconds=20)
+        scheduler.add_job(scheduled_job, 'date', run_date=run_date, id='initial_scrape')
+        
         scheduler.start()
-        safe_log("info", "Scheduler started - Scraping every 4h, Pinging every 14m")
+        safe_log("info", f"Scheduler started - Scraping every 4h, Pinging every 14m. Initial scrape scheduled at {run_date}")
 
 # 3. Start Components
 # Start the web server thread (for health checks locally or if run directly)
