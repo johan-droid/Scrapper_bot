@@ -1,1 +1,1 @@
-runner: python animebot.py
+worker: python -m src.main

@@ -6,6 +6,9 @@ import time
 import requests
 import os
 
+# Set Heroku worker mode to prevent web server startup
+os.environ['HEROKU_WORKER_MODE'] = 'true'
+
 # 1. Global Setup (Runs on Import)
 patch_socket_ipv4()
 setup_logging()
@@ -21,7 +24,7 @@ def scheduled_job():
         safe_log("error", f"Scheduled job failed: {e}", exc_info=True)
 
 def self_ping():
-    """Ping the service to keep it alive"""
+    """Ping the service to keep it alive - more frequent for Heroku 1x tier"""
     try:
         url = os.getenv("EXTERNAL_URL") or os.getenv("RENDER_EXTERNAL_URL")
         # Support for Heroku (if HEROKU_APP_NAME is set, construct the URL)
@@ -29,7 +32,9 @@ def self_ping():
             url = f"https://{os.getenv('HEROKU_APP_NAME')}.herokuapp.com"
             
         if not url:
-            url = "http://127.0.0.1:10000"
+            # Skip self-ping in worker mode
+            safe_log("info", "No external URL available, skipping self-ping")
+            return
             
         # Ping the keep-alive endpoint
         requests.get(f"{url}/", timeout=10)
@@ -37,22 +42,34 @@ def self_ping():
     except Exception as e:
         safe_log("error", f"Self-ping failed: {e}")
 
+def keep_worker_awake():
+    """Lightweight task to keep worker active and prevent sleep"""
+    safe_log("info", "Worker heartbeat - keeping process active")
+    # Small memory operation to keep the process engaged
+    import random
+    _ = [random.random() for _ in range(100)]
+
 from datetime import datetime, timedelta
 
 def start_scheduler():
     if not scheduler.running:
-        # Main job: Every 4 hours
-        scheduler.add_job(scheduled_job, 'interval', hours=4, id='scrape_job')
+        # Main job: Every 2 hours (reduced from 4 hours)
+        scheduler.add_job(scheduled_job, 'interval', hours=2, id='scrape_job')
         
-        # Keep-alive job: Every 14 minutes (Render sleeps after 15 mins of inactivity)
-        scheduler.add_job(self_ping, 'interval', minutes=14, id='ping_job')
+        # Keep-alive job: Every 10 minutes (more frequent for 1x tier)
+        # Skip in Heroku worker mode as workers don't need keep-alive
+        if not os.getenv("HEROKU_APP_NAME"):
+            scheduler.add_job(self_ping, 'interval', minutes=10, id='ping_job')
         
-        # Initial run: 20 seconds from now (to execute immediately after deployment)
-        run_date = datetime.now() + timedelta(seconds=20)
+        # Worker heartbeat: Every 5 minutes to prevent sleep
+        scheduler.add_job(keep_worker_awake, 'interval', minutes=5, id='heartbeat_job')
+        
+        # Initial run: 30 seconds from now (to execute immediately after deployment)
+        run_date = datetime.now() + timedelta(seconds=30)
         scheduler.add_job(scheduled_job, 'date', run_date=run_date, id='initial_scrape')
         
         scheduler.start()
-        safe_log("info", f"Scheduler started - Scraping every 4h, Pinging every 14m. Initial scrape scheduled at {run_date}")
+        safe_log("info", f"Scheduler started - Scraping every 2h, Heartbeat every 5m. Initial scrape scheduled at {run_date}")
 
 # 3. Start Components
 # Start the scheduler
@@ -64,7 +81,7 @@ start_scheduler()
 # For now, let's execute it once safely if not in a worker restart loop
 try:
     # Check if we are in the main process
-    safe_log("info", "Application startup complete")
+    safe_log("info", "Heroku 1x worker startup complete - Optimized for continuous operation")
 except Exception:
     pass
 

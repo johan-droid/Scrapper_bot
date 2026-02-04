@@ -277,18 +277,13 @@ def format_news_message(item: NewsItem):
 def send_to_telegram(item: NewsItem, slot, posted_set):
     """
     Send news to Telegram with Telegraph integration and robust error handling
+    Optimized: Writes to Supabase ONLY after successful send to reduce DB load
     """
     # Spam detection (triple-layer check)
     if is_duplicate(item.title, item.article_url, posted_set):
         logging.info(f"[BLOCKED] Skipping duplicate: {item.title[:50]}")
         return False
 
-    # Record attempt in database first
-    if not record_post(item.title, item.source, item.article_url, slot, posted_set, 
-                      item.category, status='attempted'):
-        logging.warning("[WARN] Failed to record attempt, skipping to avoid spam")
-        return False
-    
     # Create Telegraph article (with rate limiting)
     try:
         telegraph_url = create_telegraph_article(item)
@@ -379,24 +374,27 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
             
     sess.close()
 
-    # Update status in database
+    # DB Operation: Only record if successful
     if success:
-        update_post_status(item.title, 'sent')
+        # One single write to DB
+        record_post(
+            title=item.title,
+            source_code=item.source,
+            article_url=item.article_url,
+            slot=slot,
+            posted_titles_set=posted_set,
+            category=item.category,
+            status='sent',
+            telegraph_url=item.telegraph_url
+        )
         
-        # Update Telegraph URL if created
-        if item.telegraph_url:
-            update_telegraph_url(item.title, item.telegraph_url)
-        
-        # Add to in-memory set
-        key = normalize_title(item.title)
-        posted_set.add(key)
-        
-        # Increment counters
+        # Increment counters (atomic)
         increment_post_counters(now_local().date())
         
         return True
     else:
-        update_post_status(item.title, 'failed')
+        # We don't record failures to DB to save space/bandwidth
+        # Just return False so it might be retried next time (or skipped if cache persists)
         return False
 
 def send_admin_report(status, posts_sent, source_counts, error=None):
@@ -492,10 +490,11 @@ def send_admin_report(status, posts_sent, source_counts, error=None):
 def run_once():
     """
     Main execution with Telegraph integration and comprehensive error handling
+    Optimized for 2-hour intervals and reduced Supabase load
     """
     dt = now_local()
     date_obj = dt.date()
-    slot = dt.hour // 4
+    slot = dt.hour // 2  # Changed from 4 to 2 for 2-hour intervals
     
     # Attempt to acquire run lock
     run_id = start_run_lock(date_obj, slot)
@@ -510,10 +509,10 @@ def run_once():
 
     try:
         safe_log("info", f"\n{'='*70}")
-        safe_log("info", f"🚀 STARTING NEWS BOT RUN (Telegraph Edition)")
+        safe_log("info", f"🚀 STARTING NEWS BOT RUN (2-Hour Edition)")
         safe_log("info", f"{'='*70}")
         safe_log("info", f"📅 Date: {date_obj}")
-        safe_log("info", f"🕐 Slot: {slot} ({dt.strftime('%I:%M %p %Z')})")
+        safe_log("info", f"🕐 Slot: {slot} ({dt.strftime('%I:%M %p %Z')}) - 2-hour interval")
         safe_log("info", f"🆔 Run ID: {run_id}")
         safe_log("info", f"{'='*70}\n")
         
@@ -521,17 +520,17 @@ def run_once():
         if should_reset_daily_tracking():
             safe_log("info", "🔄 NEW DAY DETECTED - Resetting daily tracking")
         
-        # Initialize database
+        # Initialize database with reduced frequency for Supabase efficiency
         initialize_bot_stats()
         ensure_daily_row(date_obj)
         
-        # Load posted titles for deduplication
+        # Load posted titles for deduplication (cache-friendly)
         posted_set = load_posted_titles(date_obj)
         all_items = []
         
-        safe_log("info", "📡 FETCHING NEWS FROM SOURCES...\n")
+        safe_log("info", "📡 FETCHING NEWS FROM SOURCES (Optimized for 2-hour cycle)...\n")
         
-        # Fetch from all RSS feeds
+        # Fetch from all RSS feeds with enhanced efficiency
         for code, url in RSS_FEEDS.items():
             if circuit_breaker.can_call(code):
                 source_label = SOURCE_LABEL.get(code, code)

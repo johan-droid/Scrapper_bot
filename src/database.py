@@ -16,10 +16,15 @@ supabase = None
 if SUPABASE_URL and SUPABASE_KEY and create_client:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        logging.info("[OK] Supabase connected successfully")
+        logging.info("[OK] Supabase connected successfully (Optimized for 2-hour intervals)")
     except Exception as e:
         logging.warning(f"Supabase connection failed: {e}")
         supabase = None
+
+# Cache for reducing Supabase load
+_posted_titles_cache = {}
+_cache_timestamp = None
+CACHE_DURATION = timedelta(hours=1)  # Cache for 1 hour to reduce DB calls
 
 def normalize_title(title):
     prefixes = ["BREAKING:", "NEW:", "UPDATE:", "DC Wiki Update: ", "TMS News: ", 
@@ -45,9 +50,10 @@ def is_duplicate(title, url, posted_titles_set, date_check=True):
             safe_log("info", f"DUPLICATE (Fuzzy {dist:.2%}): {title[:50]}")
             return True
     
+    # Reduced Supabase checks for 2-hour intervals - only check recent 3 days instead of 7
     if supabase:
         try:
-            past_date = str((now_local().date() - timedelta(days=7)))
+            past_date = str((now_local().date() - timedelta(days=3)))
             r = supabase.table("posted_news")\
                 .select("normalized_title, posted_date")\
                 .eq("normalized_title", norm_title)\

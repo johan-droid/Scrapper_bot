@@ -1,7 +1,7 @@
 {
   "name": "Scrapper Bot",
   "description": "A Telegram bot that scrapes news from various sources and posts them to channels.",
-  "keywords": ["telegram", "bot", "python", "scraper"],
+  "keywords": ["telegram", "bot", "python", "scraper", "worker"],
   "env": {
     "BOT_TOKEN": {
       "description": "Your Telegram Bot Token",
@@ -40,8 +40,12 @@
       "value": "False",
       "required": false
     },
-    "EXTERNAL_URL": {
-      "description": "URL of this app (e.g. https://your-app.herokuapp.com) for self-pinging. If using Heroku, HEROKU_APP_NAME can be used instead.",
+    "TELEGRAPH_TOKEN": {
+      "description": "Telegraph API token for creating articles",
+      "required": false
+    },
+    "HEROKU_APP_NAME": {
+      "description": "Your Heroku app name (auto-detected, but can be set manually)",
       "required": false
     }
   },
@@ -49,5 +53,11 @@
     {
       "url": "heroku/python"
     }
-  ]
+  ],
+  "formation": {
+    "worker": {
+      "quantity": 1,
+      "size": "free"
+    }
+  }
 }
