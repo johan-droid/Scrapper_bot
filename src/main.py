@@ -119,11 +119,39 @@ if __name__ == "__main__":
     safe_log("info", "🧪 Running immediate test scrape...")
     run_once()
     
-    try:
-        safe_log("info", "⏳ Keeping process alive... (Press Ctrl+C to stop)")
-        while True:
-            time.sleep(1)
-    except (KeyboardInterrupt, SystemExit):
-        safe_log("info", "🛑 Shutting down gracefully...")
-        scheduler.shutdown()
-        safe_log("info", "✅ Bot stopped")
+    # Import command handlers
+    from telegram.ext import ApplicationBuilder, CommandHandler
+    from src.config import BOT_TOKEN
+    from src.commands import start_command, ping_command, status_command, force_run_command
+    import asyncio
+
+    if not BOT_TOKEN:
+        safe_log("error", "❌ BOT_TOKEN is missing! Cannot start Telegram listener.")
+    else:
+        try:
+            safe_log("info", "🤖 Starting Telegram Command Listener...")
+            # Build Application
+            application = ApplicationBuilder().token(BOT_TOKEN).build()
+            
+            # Add Handlers
+            application.add_handler(CommandHandler("start", start_command))
+            application.add_handler(CommandHandler("ping", ping_command))
+            application.add_handler(CommandHandler("status", status_command))
+            application.add_handler(CommandHandler("force", force_run_command))
+            
+            safe_log("info", "✅ Telegram Bot listening for commands (/start, /status, /force)")
+            
+            # Helper to run the application polling
+            # We use run_polling() which blocks, serving as our keep-alive
+            application.run_polling()
+            
+        except Exception as e:
+            safe_log("error", f"❌ Failed to start Telegram listener: {e}")
+            # Fallback to simple keep-alive if listener fails
+            try:
+                safe_log("info", "⏳ Keeping process alive (Fallback)... (Press Ctrl+C to stop)")
+                while True:
+                    time.sleep(1)
+            except (KeyboardInterrupt, SystemExit):
+                scheduler.shutdown()
+                safe_log("info", "✅ Bot stopped")
