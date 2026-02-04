@@ -97,7 +97,7 @@ if __name__ == "__main__":
     keep_alive()
     
     # Run once immediately for testing
-    # run_once() # Commented out to avoid double run on simple startup test
+    run_once()
     
     try:
         while True:
