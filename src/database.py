@@ -269,3 +269,36 @@ def end_run_lock(run_id, status, posts_sent, source_counts, error=None):
         supabase.table("runs").update(data).eq("id", run_id).execute()
     except Exception as e:
         logging.error(f"Failed to release lock: {e}")
+def get_todays_posts_stats():
+    """
+    Fetch all posts for the current day to generate a detailed report.
+    Returns a dict with summary stats and list of posts.
+    """
+    if not supabase: 
+        return None
+    
+    try:
+        date_obj = str(now_local().date())
+        # Fetch all posts for today
+        r = supabase.table("posted_news")\
+            .select("source, full_title, status, created_at, channel_type")\
+            .eq("posted_date", date_obj)\
+            .execute()
+        
+        data = r.data if r.data else []
+        
+        stats = {
+            "total": len(data),
+            "sent": sum(1 for x in data if x.get('status') == 'sent'),
+            "sources": defaultdict(int),
+            "posts": data
+        }
+        
+        for item in data:
+            src = item.get('source', 'Unknown')
+            stats["sources"][src] += 1
+            
+        return stats
+    except Exception as e:
+        logging.error(f"Failed to fetch today's stats: {e}")
+        return None

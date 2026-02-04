@@ -11,3 +11,4 @@ flask
 gunicorn
 apscheduler
 python-dateutil
+pyTelegramBotAPI==4.14.0

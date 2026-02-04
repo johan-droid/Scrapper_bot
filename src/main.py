@@ -50,6 +50,7 @@ def keep_worker_awake():
     _ = [random.random() for _ in range(100)]
 
 from datetime import datetime, timedelta
+from src.commands import start_bot_listener
 
 def start_scheduler():
     if not scheduler.running:
@@ -70,6 +71,9 @@ def start_scheduler():
         
         scheduler.start()
         safe_log("info", f"Scheduler started - Scraping every 2h, Heartbeat every 5m. Initial scrape scheduled at {run_date}")
+        
+        # Start the Telegram command listener (Daemon thread)
+        start_bot_listener()
 
 # 3. Start Components
 # Start the scheduler
@@ -93,7 +97,7 @@ if __name__ == "__main__":
     keep_alive()
     
     # Run once immediately for testing
-    run_once()
+    # run_once() # Commented out to avoid double run on simple startup test
     
     try:
         while True:
