@@ -11,4 +11,4 @@ flask
 gunicorn
 apscheduler
 python-dateutil
-python-telegram-bot
+python-telegram-bot==20.3
