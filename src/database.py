@@ -303,7 +303,7 @@ def get_todays_posts_stats():
         date_obj = str(now_local().date())
         # Fetch all posts for today
         r = supabase.table("posted_news")\
-            .select("source, full_title, status, created_at, channel_type")\
+            .select("source, full_title, status, posted_at, channel_type")\
             .eq("posted_date", date_obj)\
             .execute()
         
