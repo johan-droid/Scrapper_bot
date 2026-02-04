@@ -109,14 +109,39 @@ def start_bot_listener():
     """
     def runner():
         safe_log("info", "Starting Telegram command listener...")
+        
+        # 1. Self-Check & Cleanup
+        try:
+            bot.remove_webhook()
+            time.sleep(1) # Give it a moment to clear
+            
+            me = bot.get_me()
+            safe_log("info", f"Bot Identity Verified: @{me.username} (ID: {me.id})")
+            
+            # 2. Notify Admin on Startup (Best effort)
+            if ADMIN_ID:
+                try:
+                    bot.send_message(
+                        ADMIN_ID, 
+                        "🟢 **Command Listener Restored**\nI am listening for /start and /posts.", 
+                        parse_mode="Markdown"
+                    )
+                    safe_log("info", f"Startup notification sent to Admin {ADMIN_ID}")
+                except Exception as ex:
+                    safe_log("warning", f"Could not send startup notification: {ex}")
+            
+        except Exception as e:
+            safe_log("error", f"Bot startup check failed: {e}")
+            # Continue anyway to try polling
+            
+        # 3. Start Polling Loop
         while True:
             try:
-                # Remove webhook if it exists (conflicts with polling)
-                bot.remove_webhook()
-                # Start polling
-                bot.infinity_polling(timeout=20, long_polling_timeout=20)
+                safe_log("info", "Polling started...")
+                # skip_pending=True ignores old messages to avoid floods on restart
+                bot.infinity_polling(timeout=20, long_polling_timeout=20, restart_on_change=False, skip_pending=False)
             except Exception as e:
-                safe_log("error", f"Telegram polling failed: {e}")
+                safe_log("error", f"Telegram polling crashed: {e}")
                 time.sleep(5) # Wait before retry
 
     t = threading.Thread(target=runner, daemon=True)
