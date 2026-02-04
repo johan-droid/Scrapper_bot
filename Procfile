@@ -1,1 +1,1 @@
-web: gunicorn src.main:app
+runner: python animebot.py
