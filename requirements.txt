@@ -5,10 +5,5 @@ pytz
 supabase>=2.27.0
 python-dotenv
 lxml
-httpx
-httpcore
-flask
-gunicorn
-apscheduler
-python-dateutil
-python-telegram-bot==20.3
+httpx==0.27.2
+python-telegram-bot==20.7
