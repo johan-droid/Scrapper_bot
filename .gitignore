@@ -283,3 +283,4 @@ htmlcov/
 .Trashes
 ehthumbs.db
 Thumbs.db
+pip_log.txt
