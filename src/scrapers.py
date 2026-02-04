@@ -120,15 +120,21 @@ def parse_rss_robust(soup, source_code):
             if date_tag:
                 try:
                     dt_text = date_tag.text.strip()
-                    try:
-                        dt = datetime.strptime(dt_text, "%a, %d %b %Y %H:%M:%S %z")
-                        pub_date = dt.astimezone(local_tz).date()
-                    except:
-                        pub_date = datetime.fromisoformat(dt_text.replace('Z', '+00:00')).astimezone(local_tz).date()
+                    # Use dateutil for robust parsing (handles GMT, ISO, etc.)
+                    from dateutil import parser
+                    dt = parser.parse(dt_text)
+                    
+                    # Handle naive datetimes (assume UTC if missing)
+                    if dt.tzinfo is None:
+                        import pytz
+                        dt = dt.replace(tzinfo=pytz.utc)
+                        
+                    pub_date = dt.astimezone(local_tz).date()
                     
                     if not DEBUG_MODE and pub_date not in [today, yesterday]:
                         continue
-                except: 
+                except Exception as e:
+                    logging.debug(f"Date parse failed: {e}")
                     continue
             
             title_tag = entry.find(['title', 'dc:title'])
