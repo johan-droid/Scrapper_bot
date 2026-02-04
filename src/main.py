@@ -120,30 +120,27 @@ if __name__ == "__main__":
     run_once()
     
     # Import command handlers
-    from telegram.ext import ApplicationBuilder, CommandHandler
+    import telebot
     from src.config import BOT_TOKEN
-    from src.commands import start_command, ping_command, status_command, force_run_command
-    import asyncio
+    from src.commands import register_handlers
 
     if not BOT_TOKEN:
         safe_log("error", "❌ BOT_TOKEN is missing! Cannot start Telegram listener.")
     else:
         try:
-            safe_log("info", "🤖 Starting Telegram Command Listener...")
-            # Build Application
-            application = ApplicationBuilder().token(BOT_TOKEN).build()
+            safe_log("info", "🤖 Starting Telegram Command Listener (Telebot)...")
             
-            # Add Handlers
-            application.add_handler(CommandHandler("start", start_command))
-            application.add_handler(CommandHandler("ping", ping_command))
-            application.add_handler(CommandHandler("status", status_command))
-            application.add_handler(CommandHandler("force", force_run_command))
+            # Initialize Bot
+            bot = telebot.TeleBot(BOT_TOKEN)
             
-            safe_log("info", "✅ Telegram Bot listening for commands (/start, /status, /force)")
+            # Register Handlers
+            register_handlers(bot)
             
-            # Helper to run the application polling
-            # We use run_polling() which blocks, serving as our keep-alive
-            application.run_polling()
+            safe_log("info", "✅ Telegram Bot listening for commands (/start, /ping, /status, /force)")
+            
+            # Start Polling (Blocking)
+            # infinity_polling automatically handles retries and long polling
+            bot.infinity_polling()
             
         except Exception as e:
             safe_log("error", f"❌ Failed to start Telegram listener: {e}")
