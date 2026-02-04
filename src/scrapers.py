@@ -280,7 +280,7 @@ def extract_full_article_content(url, source):
 
 def parse_rss_robust(soup, source_code):
     """
-    Robust RSS/Atom parser with improved date handling and validation
+    Enhanced RSS/Atom parser with better handling for problematic feeds
     """
     items = []
     
@@ -302,14 +302,16 @@ def parse_rss_robust(soup, source_code):
             pub_date = None
             pub_datetime = None
             
-            # Try multiple date fields
+            # Try multiple date fields with enhanced handling
             date_tag = (
                 entry.find('pubDate') or 
                 entry.find('published') or 
                 entry.find('dc:date') or 
                 entry.find('updated') or
                 entry.find('lastBuildDate') or
-                entry.find('date')
+                entry.find('date') or
+                entry.find('created') or
+                entry.find('issued')
             )
             
             if date_tag:
@@ -319,16 +321,32 @@ def parse_rss_robust(soup, source_code):
                 if pub_datetime:
                     pub_date = pub_datetime.date()
                     
-                    # Date filtering (skip old news unless in debug mode)
+                    # Relaxed date filtering for problematic sources
                     if not DEBUG_MODE:
-                        if pub_date not in [today, yesterday]:
-                            logging.debug(f"Skipping old article from {pub_date}: {entry.find('title').text[:50] if entry.find('title') else 'No title'}")
-                            continue
+                        if source_code in ['ANI', 'HONEY', 'WIRE', 'SCROLL', 'PRINT']:
+                            # For problematic sources, accept last 3 days
+                            three_days_ago = today - timedelta(days=3)
+                            if pub_date < three_days_ago:
+                                logging.debug(f"Skipping old article from {pub_date}: {entry.find('title').text[:50] if entry.find('title') else 'No title'}")
+                                continue
+                        else:
+                            # For good sources, stick to today/yesterday
+                            if pub_date not in [today, yesterday]:
+                                logging.debug(f"Skipping old article from {pub_date}: {entry.find('title').text[:50] if entry.find('title') else 'No title'}")
+                                continue
             else:
                 logging.debug(f"No date found for entry in {source_code}")
-                # In production, skip entries without dates
-                if not DEBUG_MODE:
-                    continue
+                # For problematic sources, be more lenient
+                if source_code in ['ANI', 'HONEY', 'WIRE', 'SCROLL', 'PRINT']:
+                    if not DEBUG_MODE:
+                        # Skip only if in debug mode, otherwise proceed
+                        pass
+                    else:
+                        continue
+                else:
+                    # In production, skip entries without dates for good sources
+                    if not DEBUG_MODE:
+                        continue
             
             # ============ TITLE EXTRACTION ============
             title_tag = entry.find('title') or entry.find('dc:title')
@@ -337,6 +355,11 @@ def parse_rss_robust(soup, source_code):
                 continue
             
             title = title_tag.text.strip()
+            
+            # Skip very short titles (likely garbage)
+            if len(title) < 10:
+                logging.debug(f"Skipping short title: {title}")
+                continue
             
             # ============ LINK EXTRACTION ============
             link_str = None
@@ -369,14 +392,31 @@ def parse_rss_robust(soup, source_code):
             
             # Method 4: Extract from description/content
             if not link_str:
-                desc_tag = entry.find('description') or entry.find('summary')
+                desc_tag = entry.find('description') or entry.find('summary') or entry.find('content')
                 if desc_tag:
                     import re
                     urls = re.findall(r'href=["\']([^"\']+)["\']', str(desc_tag))
                     if urls:
                         link_str = urls[0]
             
+            # Method 5: Look for any URL in the entire entry
+            if not link_str:
+                import re
+                entry_text = str(entry)
+                urls = re.findall(r'https?://[^\s<>"\']+', entry_text)
+                if urls:
+                    # Prefer URLs that look like article links
+                    for url in urls:
+                        if any(keyword in url.lower() for keyword in ['article', 'story', 'news', 'post']):
+                            link_str = url
+                            break
+                    if not link_str:
+                        link_str = urls[0]  # Fallback to first URL
+            
             # Validate link
+            if not link_str or not link_str.startswith('http'):
+                logging.debug(f"Skipping entry without valid link: {title[:50]}")
+                continue
             if not link_str or not link_str.startswith('http'):
                 logging.debug(f"No valid link found for: {title[:50]}")
                 continue
@@ -480,25 +520,112 @@ def parse_rss_robust(soup, source_code):
 
 def fetch_rss(url, source_name, parser_func):
     """
-    Fetch and parse RSS feed with circuit breaker pattern
+    Enhanced RSS feed fetcher with better error handling and fallbacks
     """
     session = get_scraping_session()
     try:
         logging.debug(f"Fetching {source_name} from {url}")
         
-        response = session.get(url, timeout=25)
-        response.raise_for_status()
+        # Try with different approaches for problematic feeds
+        response = None
+        content = None
         
-        # Try XML parser first (preferred for RSS/Atom)
+        # First attempt: Standard request
         try:
-            soup = BeautifulSoup(response.content, "xml")
-            # Verify it's actually XML
-            if not soup.find():
-                raise Exception("Not valid XML")
-        except Exception:
-            # Fallback to HTML parser
-            logging.debug(f"XML parsing failed for {source_name}, trying HTML parser")
-            soup = BeautifulSoup(response.content, "html.parser")
+            response = session.get(url, timeout=25)
+            response.raise_for_status()
+            content = response.content
+        except Exception as e:
+            logging.warning(f"Standard request failed for {source_name}: {e}")
+            
+            # Second attempt: With different headers for problematic sites
+            if source_name in ['ANI', 'HONEY', 'WIRE', 'SCROLL', 'PRINT']:
+                try:
+                    session.headers.update({
+                        'User-Agent': 'Mozilla/5.0 (compatible; RSS-Reader/1.0)',
+                        'Accept': 'application/rss+xml, application/xml, text/xml',
+                        'Cache-Control': 'no-cache'
+                    })
+                    response = session.get(url, timeout=30)
+                    response.raise_for_status()
+                    content = response.content
+                    logging.info(f"Fallback request succeeded for {source_name}")
+                except Exception as e2:
+                    logging.error(f"Fallback request also failed for {source_name}: {e2}")
+                    
+                    # Third attempt: Try alternative URLs for problematic sources
+                    alternative_urls = {
+                        'ANI': [
+                            'https://animenewsindia.com/feed/atom/',
+                            'https://animenewsindia.com/category/news/feed/'
+                        ],
+                        'WIRE': [
+                            'https://thewire.in/feed/rss/',
+                            'https://thewire.in/feed/atom/'
+                        ],
+                        'SCROLL': [
+                            'https://scroll.in/feed/rss/',
+                            'https://scroll.in/latest/feed/'
+                        ],
+                        'PRINT': [
+                            'https://theprint.in/feed/rss/',
+                            'https://theprint.in/feed/atom/'
+                        ]
+                    }
+                    
+                    if source_name in alternative_urls:
+                        for alt_url in alternative_urls[source_name]:
+                            try:
+                                logging.info(f"Trying alternative URL for {source_name}: {alt_url}")
+                                response = session.get(alt_url, timeout=30)
+                                response.raise_for_status()
+                                content = response.content
+                                logging.info(f"Alternative URL worked for {source_name}: {alt_url}")
+                                break
+                            except Exception as e3:
+                                logging.debug(f"Alternative URL failed: {alt_url} - {e3}")
+                                continue
+                    
+                    if not content:
+                        raise e2
+            else:
+                raise e
+        
+        if not content:
+            raise Exception("No content received")
+        
+        # Enhanced XML parsing with multiple fallbacks
+        soup = None
+        parsing_attempts = [
+            ("xml", "xml"),
+            ("lxml", "lxml"),
+            ("html.parser", "html"),
+            ("html5lib", "html5")
+        ]
+        
+        for parser_name, parser_type in parsing_attempts:
+            try:
+                if parser_type == "xml":
+                    soup = BeautifulSoup(content, "xml")
+                    # Verify it's actually XML by looking for RSS/Atom elements
+                    if not soup.find(['rss', 'feed', 'item', 'entry']):
+                        raise Exception("Not valid RSS/Atom XML")
+                else:
+                    soup = BeautifulSoup(content, parser_name)
+                    # Check if we found any meaningful content
+                    if not soup.find(['item', 'entry', 'title', 'link']):
+                        raise Exception(f"No RSS elements found with {parser_name}")
+                
+                logging.debug(f"Successfully parsed {source_name} with {parser_name}")
+                break
+                
+            except Exception as parse_error:
+                logging.debug(f"Parser {parser_name} failed for {source_name}: {parse_error}")
+                soup = None
+                continue
+        
+        if not soup:
+            raise Exception("All parsing attempts failed")
         
         items = parser_func(soup)
         

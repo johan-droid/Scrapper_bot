@@ -397,6 +397,64 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
         # Just return False so it might be retried next time (or skipped if cache persists)
         return False
 
+def send_scraper_failure_report(failed_scrapers, total_scrapers):
+    """Send detailed report about failed scrapers to admin"""
+    if not ADMIN_ID or not failed_scrapers:
+        return
+    
+    dt = now_local()
+    
+    # Build failure report
+    failure_details = []
+    for scraper, error_info in failed_scrapers.items():
+        source_label = SOURCE_LABEL.get(scraper, scraper)
+        failure_details.append(f"• <b>{source_label} ({scraper})</b>: {error_info}")
+    
+    failure_rate = len(failed_scrapers) / total_scrapers * 100
+    
+    report_msg = (
+        f"🚨 <b>Scraper Failure Report</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        f"📅 <b>Report Time</b>\n"
+        f"• {dt.strftime('%Y-%m-%d %H:%M:%S %Z')}\n\n"
+        
+        f"📊 <b>Failure Summary</b>\n"
+        f"• Failed Scrapers: <b>{len(failed_scrapers)}/{total_scrapers}</b>\n"
+        f"• Failure Rate: <b>{failure_rate:.1f}%</b>\n"
+        f"• Success Rate: <b>{100 - failure_rate:.1f}%</b>\n\n"
+        
+        f"🔍 <b>Failed Scrapers Details</b>\n"
+        f"{chr(10).join(failure_details)}\n\n"
+        
+        f"💡 <b>Recommendations</b>\n"
+        f"• Check RSS feed URLs\n"
+        f"• Verify source availability\n"
+        f"• Consider temporary removal if consistently failing"
+    )
+    
+    sess = get_fresh_telegram_session()
+    try:
+        response = sess.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
+            json={
+                "chat_id": ADMIN_ID, 
+                "text": report_msg, 
+                "parse_mode": "HTML"
+            }, 
+            timeout=20
+        )
+        
+        if response.status_code == 200:
+            logging.info("✅ Scraper failure report sent to admin")
+        else:
+            logging.warning(f"⚠️ Failed to send scraper failure report: {response.status_code}")
+            
+    except Exception as e:
+        logging.error(f"❌ Error sending scraper failure report: {e}")
+    finally:
+        sess.close()
+
 def send_admin_report(status, posts_sent, source_counts, error=None):
     """Send comprehensive admin report with Telegraph statistics"""
     if not ADMIN_ID: 
@@ -404,7 +462,7 @@ def send_admin_report(status, posts_sent, source_counts, error=None):
 
     dt = now_local()
     date_str = str(dt.date())
-    slot = dt.hour // 4
+    slot = dt.hour // 2  # Updated for 2-hour intervals
     
     # Calculate category breakdowns
     anime_posts = sum(count for source, count in source_counts.items() if source in ANIME_NEWS_SOURCES)
@@ -448,7 +506,7 @@ def send_admin_report(status, posts_sent, source_counts, error=None):
         
         f"📅 <b>Run Details</b>\n"
         f"• Date: {date_str}\n"
-        f"• Time Slot: {slot} ({dt.strftime('%I:%M %p %Z')})\n"
+        f"• Time Slot: {slot} ({dt.strftime('%I:%M %p %Z')}) - 2-hour interval\n"
         f"• Status: <b>{status.upper()}</b>\n\n"
         
         f"📊 <b>This Cycle</b>\n"
@@ -530,21 +588,67 @@ def run_once():
         
         safe_log("info", "📡 FETCHING NEWS FROM SOURCES (Optimized for 2-hour cycle)...\n")
         
+        # Track scraper performance
+        scraper_results = {}
+        failed_scrapers = {}
+        
         # Fetch from all RSS feeds with enhanced efficiency
         for code, url in RSS_FEEDS.items():
             if circuit_breaker.can_call(code):
                 source_label = SOURCE_LABEL.get(code, code)
                 logging.info(f"  🔍 Fetching {source_label} ({code})...")
                 
-                items = fetch_rss(url, code, lambda s: parse_rss_robust(s, code))
-                
-                if items:
-                    all_items.extend(items)
-                    logging.info(f"    ✅ Found {len(items)} items")
-                else:
-                    logging.info(f"    ⚠️ No items found")
+                try:
+                    items = fetch_rss(url, code, lambda s: parse_rss_robust(s, code))
+                    
+                    if items:
+                        all_items.extend(items)
+                        logging.info(f"    ✅ Found {len(items)} items")
+                        scraper_results[code] = {
+                            'status': 'success',
+                            'items_count': len(items),
+                            'source_label': source_label
+                        }
+                    else:
+                        logging.warning(f"    ⚠️  No items found")
+                        scraper_results[code] = {
+                            'status': 'no_items',
+                            'items_count': 0,
+                            'source_label': source_label
+                        }
+                        failed_scrapers[code] = "No items found in RSS feed"
+                        
+                except Exception as e:
+                    logging.error(f"    ❌ Error fetching {source_label}: {e}")
+                    scraper_results[code] = {
+                        'status': 'error',
+                        'items_count': 0,
+                        'source_label': source_label,
+                        'error': str(e)
+                    }
+                    failed_scrapers[code] = f"Fetch error: {str(e)[:100]}"
             else:
-                logging.warning(f"  ⏭️ Skipping {code} (circuit breaker open)")
+                source_label = SOURCE_LABEL.get(code, code)
+                logging.warning(f"    🔴 Circuit breaker open for {source_label}")
+                scraper_results[code] = {
+                    'status': 'circuit_breaker',
+                    'items_count': 0,
+                    'source_label': source_label
+                }
+                failed_scrapers[code] = f"Circuit breaker open ({circuit_breaker.failure_counts.get(code, 0)} failures)"
+        
+        # Log scraper performance summary
+        successful_scrapers = sum(1 for r in scraper_results.values() if r['status'] == 'success')
+        total_scrapers = len(scraper_results)
+        success_rate = successful_scrapers / total_scrapers * 100
+        
+        safe_log("info", f"\n📊 SCRAPER PERFORMANCE SUMMARY:")
+        safe_log("info", f"   ✅ Successful: {successful_scrapers}/{total_scrapers} ({success_rate:.1f}%)")
+        safe_log("info", f"   📄 Total Items: {len(all_items)}")
+        
+        # Send failure report if there are failed scrapers
+        if failed_scrapers and ADMIN_ID:
+            send_scraper_failure_report(failed_scrapers, total_scrapers)
 
         safe_log("info", f"\n📤 POSTING TO TELEGRAM (with Telegraph)...\n")
         

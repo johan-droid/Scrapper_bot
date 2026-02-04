@@ -154,11 +154,13 @@ cython_debug/
 .DS_Store
 Thumbs.db
 
-# Project Specific - News Scrapers
+# Project Specific - News Scrapers & Telegram Bot
 *.log
 news_update_*.txt
 debug_*.xml
 debug_*.py
+
+# Test files (keep only essential ones)
 test_*.py
 quick_test.py
 integration_example.py
@@ -173,6 +175,11 @@ news_scraper.log
 world_news_scraper.log
 bot_status_update.log
 supabase_schema_update.sql.backup
+test_scrapers.py
+test_scraper_failures.py
+test_bot_complete.py
+test_2hour_scheduler.py
+demo_failure_report.py
 
 # Original project files
 posted_titles.json
@@ -209,17 +216,70 @@ telegram_cache/
 bot_sessions/
 user_data.json
 
-# Utility Scripts
-# src/diagnose_telegram.py
-# sql/reset_today_posts.sql
+# Database files
+*.sqlite
+*.sqlite3
+*.db
 
+# Logs and monitoring
+logs/
+*.log.*
+monitoring/
+metrics/
 
+# Cache and temporary data
+cache/
+temp/
+tmp/
 
+# Heroku specific
+.runtime.toml
+.heroku/
 
-# --- Updated by Antigravity ---
-**/__pycache__/
-**/*.py[cod]
+# Environment files (all variations)
 .env.local
 .env.*.local
+.env.development
+.env.production
+.env.staging
+
+# Editor files
 *.swp
-logs/
+*.swo
+*~
+
+# System files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python virtual environments
+venv*/
+env*/
+.venv*/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Coverage and testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# IDE specific files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

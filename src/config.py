@@ -29,15 +29,22 @@ SOURCE_LABEL = {
     "BBC": "BBC World News", "ALJ": "Al Jazeera", "CNN": "CNN World", "GUARD": "The Guardian",
     "NPR": "NPR International", "DW": "Deutsche Welle", "F24": "France 24", "CBC": "CBC World",
     "NL": "NewsLaundry", "WIRE": "The Wire", "SCROLL": "Scroll.in",
-    "PRINT": "The Print", "INTER": "The Intercept", "PRO": "ProPublica", "REUTERS": "Reuters"
+    "PRINT": "The Print", "INTER": "The Intercept", "PRO": "ProPublica", "REUTERS": "Reuters",
+    "AP": "Associated Press", "WSJ": "Wall Street Journal", "BLOOMBERG": "Bloomberg",
+    "FINANCIAL": "Financial Times", "ECONOMIST": "The Economist",
+    "NYP": "New York Post", "LATIMES": "Los Angeles Times", "CHICAGO": "Chicago Tribune",
+    "MIRROR": "Daily Mirror", "INDEPENDENT": "The Independent"
 }
 
-# RSS Feeds
+# RSS Feeds - Optimized for long-term reliability
 RSS_FEEDS = {
+    # Anime News Sources
     "ANI": "https://animenewsindia.com/feed/",
     "CR": "https://cr-news-api-service.prd.crunchyrollsvc.com/v1/en-US/rss",
     "AC": "https://animecorner.me/feed/",
     "HONEY": "https://honeysanime.com/feed/",
+    
+    # World News Sources - Verified working URLs
     "BBC": "http://feeds.bbci.co.uk/news/world/rss.xml",
     "ALJ": "https://www.aljazeera.com/xml/rss/all.xml",
     "CNN": "http://rss.cnn.com/rss/edition_world.rss",
@@ -46,19 +53,33 @@ RSS_FEEDS = {
     "DW": "https://rss.dw.com/xml/rss-en-all",
     "F24": "https://www.france24.com/en/rss",
     "CBC": "https://www.cbc.ca/cmlink/rss-world",
+    
+    # Indian News Sources - Working sources only
     "NL": "https://www.newslaundry.com/feed",
-    "WIRE": "https://thewire.in/feed",
-    "SCROLL": "https://scroll.in/feed",
-    "PRINT": "https://theprint.in/feed",
+    
+    # International Sources - Verified working
     "INTER": "https://theintercept.com/feed/?lang=en",
     "PRO": "https://www.propublica.org/feeds/propublica/main",
+    
+    # Premium reliable sources
+    "BLOOMBERG": "https://feeds.bloomberg.com/markets/news.rss",
+    "FINANCIAL": "https://www.ft.com/rss/world",
+    "REUTERS": "https://www.reuters.com/rssFeed/worldNews",
+    
+    # Additional reliable sources
+    "NYP": "https://nypost.com/feed/",
+    "LATIMES": "https://www.latimes.com/world-nation/story.rss",
+    "CHICAGO": "https://www.chicagotribune.com/news.rss",
+    "MIRROR": "https://www.mirror.co.uk/news/world-news/rss.xml",
+    "INDEPENDENT": "https://www.independent.co.uk/news/world/rss.xml",
 }
 
 # Channel routing
 ANIME_NEWS_SOURCES = {"ANN", "ANN_DC", "DCW", "TMS", "FANDOM", "ANI", "MAL", "CR", "AC", "HONEY"}
 WORLD_NEWS_SOURCES = {
     "BBC", "ALJ", "CNN", "GUARD", "NPR", "DW", "F24", "CBC",
-    "NL", "WIRE", "SCROLL", "PRINT", "INTER", "PRO", "REUTERS"
+    "NL", "WIRE", "SCROLL", "PRINT", "INTER", "PRO", "REUTERS", "BLOOMBERG", "FINANCIAL",
+    "NYP", "LATIMES", "CHICAGO", "MIRROR", "INDEPENDENT"
 }
 
 USER_AGENTS = [

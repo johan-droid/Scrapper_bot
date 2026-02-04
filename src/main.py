@@ -17,11 +17,13 @@ setup_logging()
 scheduler = BackgroundScheduler()
 
 def scheduled_job():
-    """Wrapper for run_once to handle exceptions"""
+    """Main 2-hour scraping job with comprehensive logging"""
     try:
+        safe_log("info", "🚀 Starting scheduled 2-hour scraping cycle...")
         run_once()
+        safe_log("info", "✅ 2-hour scraping cycle completed successfully")
     except Exception as e:
-        safe_log("error", f"Scheduled job failed: {e}", exc_info=True)
+        safe_log("error", f"❌ Scheduled job failed: {e}", exc_info=True)
 
 def self_ping():
     """Ping the service to keep it alive - more frequent for Heroku 1x tier"""
@@ -44,64 +46,84 @@ def self_ping():
 
 def keep_worker_awake():
     """Lightweight task to keep worker active and prevent sleep"""
-    safe_log("info", "Worker heartbeat - keeping process active")
+    safe_log("info", "💓 Worker heartbeat - keeping process active")
     # Small memory operation to keep the process engaged
     import random
     _ = [random.random() for _ in range(100)]
 
+def log_scheduler_status():
+    """Log current scheduler status for monitoring"""
+    jobs = scheduler.get_jobs()
+    safe_log("info", f"📊 Scheduler Status: {len(jobs)} jobs running")
+    for job in jobs:
+        next_run = job.next_run_time.strftime('%Y-%m-%d %H:%M:%S') if job.next_run_time else 'Not scheduled'
+        safe_log("info", f"   📅 {job.id}: Next run at {next_run}")
+
 from datetime import datetime, timedelta
-from src.commands import start_bot_listener
 
 def start_scheduler():
+    """Initialize and start the scheduler with 2-hour scraping logic"""
     if not scheduler.running:
-        # Main job: Every 2 hours (reduced from 4 hours)
-        scheduler.add_job(scheduled_job, 'interval', hours=2, id='scrape_job')
+        safe_log("info", "🔧 Starting scheduler for Heroku 1x worker...")
         
-        # Keep-alive job: Every 10 minutes (more frequent for 1x tier)
-        # Skip in Heroku worker mode as workers don't need keep-alive
+        # Main job: Every 2 hours (optimized for Heroku 1x tier)
+        scheduler.add_job(scheduled_job, 'interval', hours=2, id='scrape_job')
+        safe_log("info", "   ✅ Main scraping job: Every 2 hours")
+        
+        # Keep-alive job: Every 10 minutes (only for non-Heroku environments)
         if not os.getenv("HEROKU_APP_NAME"):
             scheduler.add_job(self_ping, 'interval', minutes=10, id='ping_job')
+            safe_log("info", "   ✅ Keep-alive job: Every 10 minutes")
         
-        # Worker heartbeat: Every 5 minutes to prevent sleep
+        # Worker heartbeat: Every 5 minutes to prevent sleep (Heroku optimization)
         scheduler.add_job(keep_worker_awake, 'interval', minutes=5, id='heartbeat_job')
+        safe_log("info", "   ✅ Worker heartbeat: Every 5 minutes")
         
-        # Initial run: 30 seconds from now (to execute immediately after deployment)
+        # Status logging: Every 30 minutes for monitoring
+        scheduler.add_job(log_scheduler_status, 'interval', minutes=30, id='status_job')
+        safe_log("info", "   ✅ Status logging: Every 30 minutes")
+        
+        # Initial run: 30 seconds from now (immediate after deployment)
         run_date = datetime.now() + timedelta(seconds=30)
         scheduler.add_job(scheduled_job, 'date', run_date=run_date, id='initial_scrape')
+        safe_log("info", f"   ✅ Initial scrape: {run_date.strftime('%Y-%m-%d %H:%M:%S')}")
         
         scheduler.start()
-        safe_log("info", f"Scheduler started - Scraping every 2h, Heartbeat every 5m. Initial scrape scheduled at {run_date}")
-        
-        # Start the Telegram command listener (Daemon thread)
-        start_bot_listener()
+        safe_log("info", "🚀 Scheduler started successfully!")
+        safe_log("info", "📋 Schedule Summary:")
+        safe_log("info", "   • Main scraping: Every 2 hours")
+        safe_log("info", "   • Worker heartbeat: Every 5 minutes")
+        safe_log("info", "   • Status logging: Every 30 minutes")
+        safe_log("info", "   • Initial run: 30 seconds from now")
 
 # 3. Start Components
 # Start the scheduler
 start_scheduler()
 
 # 4. Initial Run (Non-blocking)
-# We don't want to block the import, so we can schedule the first run 
-# to happen shortly after startup if needed, or just rely on the interval.
-# For now, let's execute it once safely if not in a worker restart loop
 try:
-    # Check if we are in the main process
-    safe_log("info", "Heroku 1x worker startup complete - Optimized for continuous operation")
-except Exception:
-    pass
+    safe_log("info", "🎯 Heroku 1x worker startup complete")
+    safe_log("info", "📊 Worker configured for continuous operation")
+    safe_log("info", "⏰ Ready for 2-hour scraping cycles")
+except Exception as e:
+    safe_log("error", f"❌ Startup error: {e}")
 
 if __name__ == "__main__":
-    # If run directly (not via Gunicorn), keep the main thread alive
-    safe_log("info", "Running in manual mode...")
+    # If run directly (not via Heroku worker), keep the main thread alive
+    safe_log("info", "🔧 Running in manual mode (not Heroku worker)...")
     
     # Start the web server thread (for health checks locally)
     keep_alive()
     
     # Run once immediately for testing
+    safe_log("info", "🧪 Running immediate test scrape...")
     run_once()
     
     try:
+        safe_log("info", "⏳ Keeping process alive... (Press Ctrl+C to stop)")
         while True:
             time.sleep(1)
     except (KeyboardInterrupt, SystemExit):
+        safe_log("info", "🛑 Shutting down gracefully...")
         scheduler.shutdown()
-        safe_log("info", "Bot stopped")
+        safe_log("info", "✅ Bot stopped")

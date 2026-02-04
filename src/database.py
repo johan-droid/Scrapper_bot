@@ -108,9 +108,25 @@ def increment_post_counters(date_obj):
         logging.error(f"Atomic stats update failed: {e}")
 
 def load_posted_titles(date_obj):
-    if not supabase: return set()
+    # Use cache to reduce Supabase load for 2-hour intervals
+    global _posted_titles_cache, _cache_timestamp
+    current_time = now_local()
+    
+    # Check cache first
+    if (_cache_timestamp and 
+        current_time - _cache_timestamp < CACHE_DURATION and 
+        str(date_obj) in _posted_titles_cache):
+        safe_log("info", f"Using cached titles for {date_obj} (reduced DB load)")
+        return _posted_titles_cache[str(date_obj)]
+    
+    if not supabase: 
+        # Create empty cache entry
+        _posted_titles_cache[str(date_obj)] = set()
+        return set()
+    
     try:
-        past_date = str(date_obj - timedelta(days=7))
+        # Reduced from 7 days to 3 days for 2-hour intervals
+        past_date = str(date_obj - timedelta(days=3))
         r = supabase.table("posted_news")\
             .select("normalized_title, full_title")\
             .gte("posted_date", past_date)\
@@ -123,10 +139,16 @@ def load_posted_titles(date_obj):
             if "full_title" in x: 
                 titles.add(normalize_title(x["full_title"]))
         
-        safe_log("info", f"Loaded {len(titles)} titles from last 7 days")
+        # Update cache
+        _posted_titles_cache[str(date_obj)] = titles
+        _cache_timestamp = current_time
+        
+        safe_log("info", f"Loaded {len(titles)} titles from last 3 days (optimized for 2h intervals)")
         return titles
     except Exception as e:
         logging.error(f"Failed to load posted titles: {e}")
+        # Create empty cache entry on error
+        _posted_titles_cache[str(date_obj)] = set()
         return set()
 
 def record_post(title, source_code, article_url, slot, posted_titles_set, category=None, status='sent', telegraph_url=None):

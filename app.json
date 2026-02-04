@@ -1,7 +1,6 @@
 {
-  "name": "Scrapper Bot",
+  "name": "scrapper-bot",
   "description": "A Telegram bot that scrapes news from various sources and posts them to channels.",
-  "keywords": ["telegram", "bot", "python", "scraper", "worker"],
   "env": {
     "BOT_TOKEN": {
       "description": "Your Telegram Bot Token",
@@ -57,7 +56,7 @@
   "formation": {
     "worker": {
       "quantity": 1,
-      "size": "free"
+      "size": "eco"
     }
   }
 }
