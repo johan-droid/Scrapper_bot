@@ -5,15 +5,19 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from dateutil import parser as date_parser
+import pytz
 
 from src.config import USER_AGENTS, DEBUG_MODE
 from src.utils import safe_log, circuit_breaker, clean_text_extractor, now_local, local_tz
 from src.models import NewsItem
 
 def get_scraping_session():
+    """Create a robust HTTP session with retries and proper headers"""
     session = requests.Session()
     retry_strategy = Retry(
-        total=3, backoff_factor=2,
+        total=3, 
+        backoff_factor=2,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET", "POST"]
     )
@@ -24,35 +28,149 @@ def get_scraping_session():
     session.headers.update({
         "User-Agent": random.choice(USER_AGENTS),
         "Connection": "close",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
         "Accept-Charset": "utf-8",
         "Accept-Encoding": "gzip, deflate"
     })
     return session
 
+def parse_date_flexible(date_string):
+    """
+    Flexible date parser that handles multiple formats and timezones
+    Returns timezone-aware datetime in local timezone
+    """
+    if not date_string:
+        return None
+    
+    try:
+        # Use dateutil parser for maximum flexibility
+        dt = date_parser.parse(date_string)
+        
+        # Handle naive datetimes (assume UTC if missing timezone)
+        if dt.tzinfo is None:
+            dt = pytz.utc.localize(dt)
+        
+        # Convert to local timezone
+        return dt.astimezone(local_tz)
+        
+    except Exception as e:
+        logging.debug(f"Date parsing failed for '{date_string}': {e}")
+        
+        # Fallback: Try common formats manually
+        formats = [
+            "%a, %d %b %Y %H:%M:%S %z",      # RFC 822
+            "%a, %d %b %Y %H:%M:%S GMT",     # RSS standard
+            "%Y-%m-%dT%H:%M:%S%z",           # ISO 8601 with timezone
+            "%Y-%m-%dT%H:%M:%SZ",            # ISO 8601 UTC
+            "%Y-%m-%d %H:%M:%S",             # Simple format
+            "%Y-%m-%d",                      # Date only
+        ]
+        
+        for fmt in formats:
+            try:
+                if "GMT" in date_string:
+                    date_string = date_string.replace("GMT", "+0000")
+                
+                dt = datetime.strptime(date_string, fmt)
+                
+                # If no timezone, assume UTC
+                if dt.tzinfo is None:
+                    dt = pytz.utc.localize(dt)
+                
+                return dt.astimezone(local_tz)
+            except:
+                continue
+        
+        logging.warning(f"Could not parse date: {date_string}")
+        return None
+
 def extract_full_article_content(url, source):
     """
-    Extract full article content for Telegraph posting
+    Extract full article content for Telegraph posting with improved error handling
     Returns dict with 'text', 'images', and 'html'
     """
     session = get_scraping_session()
     try:
         response = session.get(url, timeout=15)
         response.raise_for_status()
+        
+        # Handle different encodings
+        response.encoding = response.apparent_encoding or 'utf-8'
+        
         soup = BeautifulSoup(response.text, 'html.parser')
         
         # Remove unwanted elements
-        for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside', 'iframe', 'ads']):
+        for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside', 
+                        'iframe', 'ads', 'advertisement', 'social-share', 'related-articles']):
             tag.decompose()
         
-        # Source-specific selectors
+        # Source-specific selectors (in priority order)
         content_selectors = {
-            'BBC': ['.article__body-content', '.story-body__inner', 'article'],
-            'GUARD': ['.article-body-commercial-selector', '.content__article-body', 'article'],
-            'CNN': ['.article__content', '.zn-body__paragraph', 'article'],
-            'ALJ': ['.article-p-wrapper', '.wysiwyg', 'article'],
-            'NPR': ['#storytext', '.storytext', 'article'],
-            'REUTERS': ['.article-body__content__', '.StandardArticleBody_body', 'article'],
-            'default': ['article', '.post-content', '.entry-content', '.article-content', '.story-content']
+            'BBC': [
+                '.article__body-content', 
+                '.story-body__inner', 
+                '[data-component="text-block"]',
+                'article'
+            ],
+            'GUARD': [
+                '.article-body-commercial-selector', 
+                '.content__article-body',
+                '[data-component="body"]',
+                'article'
+            ],
+            'CNN': [
+                '.article__content', 
+                '.zn-body__paragraph',
+                '.article-body',
+                'article'
+            ],
+            'ALJ': [
+                '.article-p-wrapper', 
+                '.wysiwyg',
+                '.main-article-body',
+                'article'
+            ],
+            'NPR': [
+                '#storytext', 
+                '.storytext',
+                '.storytext__body',
+                'article'
+            ],
+            'REUTERS': [
+                '.article-body__content__', 
+                '.StandardArticleBody_body',
+                '[data-testid="article-body"]',
+                'article'
+            ],
+            'ANI': [
+                '.entry-content',
+                '.post-content',
+                'article'
+            ],
+            'CR': [
+                '.article-content',
+                '.news-detail-body',
+                'article'
+            ],
+            'AC': [
+                '.entry-content',
+                '.post-content',
+                'article'
+            ],
+            'HONEY': [
+                '.entry-content',
+                '.article-body',
+                'article'
+            ],
+            'default': [
+                'article', 
+                '.post-content', 
+                '.entry-content', 
+                '.article-content', 
+                '.story-content',
+                '.main-content'
+            ]
         }
         
         selectors = content_selectors.get(source, content_selectors['default'])
@@ -61,95 +179,179 @@ def extract_full_article_content(url, source):
         for selector in selectors:
             content_div = soup.select_one(selector)
             if content_div:
+                logging.debug(f"Content found with selector: {selector}")
                 break
         
         if not content_div:
             content_div = soup.find('body')
+            logging.debug("Falling back to body tag")
         
         if not content_div:
+            logging.warning(f"No content found for {url}")
             return None
         
-        # Extract images
+        # Extract images with better filtering
         images = []
         for img in content_div.find_all('img', limit=5):
-            src = img.get('src') or img.get('data-src') or img.get('data-lazy-src')
-            if src and not any(x in src for x in ['logo', 'icon', 'avatar', 'ads', '1x1']):
-                if not src.startswith('http'):
-                    from urllib.parse import urljoin
-                    src = urljoin(url, src)
-                images.append(src)
+            src = img.get('src') or img.get('data-src') or img.get('data-lazy-src') or img.get('data-original')
+            
+            # Skip unwanted images
+            if not src:
+                continue
+            
+            # Filter out tracking pixels, icons, logos, ads
+            skip_patterns = ['logo', 'icon', 'avatar', 'ads', '1x1', 'pixel', 'tracking', 
+                           'spinner', 'loading', 'placeholder', 'transparent']
+            if any(pattern in src.lower() for pattern in skip_patterns):
+                continue
+            
+            # Convert relative URLs to absolute
+            if not src.startswith('http'):
+                from urllib.parse import urljoin
+                src = urljoin(url, src)
+            
+            # Basic size check (avoid tiny images)
+            width = img.get('width') or '0'
+            height = img.get('height') or '0'
+            try:
+                if width.isdigit() and height.isdigit():
+                    if int(width) < 100 or int(height) < 100:
+                        continue
+            except:
+                pass
+            
+            images.append(src)
         
-        # Extract paragraphs with proper formatting
+        # Extract paragraphs with proper formatting and cleanup
         paragraphs = []
-        for p in content_div.find_all(['p', 'h2', 'h3', 'blockquote'], recursive=True):
-            text = p.get_text(strip=True)
-            if len(text) > 20 and not any(x in text.lower() for x in ['cookie', 'subscribe', 'newsletter', 'advertisement']):
-                if p.name in ['h2', 'h3']:
-                    paragraphs.append(f'<h3>{text}</h3>')
-                elif p.name == 'blockquote':
-                    paragraphs.append(f'<blockquote>{text}</blockquote>')
-                else:
-                    paragraphs.append(f'<p>{text}</p>')
+        for element in content_div.find_all(['p', 'h2', 'h3', 'h4', 'blockquote', 'ul', 'ol'], recursive=True):
+            text = element.get_text(strip=True)
+            
+            # Skip short paragraphs and unwanted content
+            if len(text) < 20:
+                continue
+            
+            unwanted_phrases = [
+                'cookie', 'subscribe', 'newsletter', 'advertisement', 
+                'related articles', 'read more', 'share this',
+                'follow us', 'sign up', 'copyright'
+            ]
+            if any(phrase in text.lower() for phrase in unwanted_phrases):
+                continue
+            
+            # Format based on element type
+            if element.name in ['h2', 'h3', 'h4']:
+                paragraphs.append(f'<h3>{text}</h3>')
+            elif element.name == 'blockquote':
+                paragraphs.append(f'<blockquote>{text}</blockquote>')
+            elif element.name in ['ul', 'ol']:
+                # Convert lists to paragraphs with bullets
+                list_items = element.find_all('li')
+                for li in list_items:
+                    li_text = li.get_text(strip=True)
+                    if len(li_text) > 10:
+                        paragraphs.append(f'<p>• {li_text}</p>')
+            else:
+                paragraphs.append(f'<p>{text}</p>')
         
         # Build HTML content
         html_content = '\n'.join(paragraphs)
         
+        # Extract plain text for summary
+        plain_text = clean_text_extractor(content_div, limit=5000)
+        
         return {
             'html': html_content,
-            'text': clean_text_extractor(content_div, limit=5000),
+            'text': plain_text,
             'images': images
         }
         
+    except requests.exceptions.Timeout:
+        logging.warning(f"Timeout extracting content from {url}")
+        return None
+    except requests.exceptions.RequestException as e:
+        logging.warning(f"Request failed for {url}: {e}")
+        return None
     except Exception as e:
-        logging.debug(f"Content extraction failed for {url}: {e}")
+        logging.error(f"Content extraction failed for {url}: {e}")
         return None
     finally:
         session.close()
 
 def parse_rss_robust(soup, source_code):
+    """
+    Robust RSS/Atom parser with improved date handling and validation
+    """
     items = []
+    
+    # Find all entries (works for both RSS and Atom)
     entries = soup.find_all(['item', 'entry'])
+    
+    if not entries:
+        logging.warning(f"No entries found in feed for {source_code}")
+        return items
     
     today = now_local().date()
     yesterday = today - timedelta(days=1)
+    
+    logging.debug(f"Processing {len(entries)} entries for {source_code}")
 
     for entry in entries:
         try:
+            # ============ DATE EXTRACTION ============
             pub_date = None
-            date_tag = entry.find(['pubDate', 'published', 'dc:date', 'updated'])
+            pub_datetime = None
+            
+            # Try multiple date fields
+            date_tag = (
+                entry.find('pubDate') or 
+                entry.find('published') or 
+                entry.find('dc:date') or 
+                entry.find('updated') or
+                entry.find('lastBuildDate') or
+                entry.find('date')
+            )
+            
             if date_tag:
-                try:
-                    dt_text = date_tag.text.strip()
-                    # Use dateutil for robust parsing (handles GMT, ISO, etc.)
-                    from dateutil import parser
-                    dt = parser.parse(dt_text)
+                date_string = date_tag.text.strip()
+                pub_datetime = parse_date_flexible(date_string)
+                
+                if pub_datetime:
+                    pub_date = pub_datetime.date()
                     
-                    # Handle naive datetimes (assume UTC if missing)
-                    if dt.tzinfo is None:
-                        import pytz
-                        dt = dt.replace(tzinfo=pytz.utc)
-                        
-                    pub_date = dt.astimezone(local_tz).date()
-                    
-                    if not DEBUG_MODE and pub_date not in [today, yesterday]:
-                        continue
-                except Exception as e:
-                    logging.debug(f"Date parse failed: {e}")
+                    # Date filtering (skip old news unless in debug mode)
+                    if not DEBUG_MODE:
+                        if pub_date not in [today, yesterday]:
+                            logging.debug(f"Skipping old article from {pub_date}: {entry.find('title').text[:50] if entry.find('title') else 'No title'}")
+                            continue
+            else:
+                logging.debug(f"No date found for entry in {source_code}")
+                # In production, skip entries without dates
+                if not DEBUG_MODE:
                     continue
             
-            title_tag = entry.find(['title', 'dc:title'])
-            if not title_tag:
+            # ============ TITLE EXTRACTION ============
+            title_tag = entry.find('title') or entry.find('dc:title')
+            if not title_tag or not title_tag.text.strip():
+                logging.debug("Skipping entry without title")
                 continue
             
-            # Link extraction
+            title = title_tag.text.strip()
+            
+            # ============ LINK EXTRACTION ============
             link_str = None
+            
+            # Method 1: <link> tag
             link_tag = entry.find('link')
             if link_tag:
+                # Atom feeds use href attribute
                 if link_tag.get('href'):
                     link_str = link_tag.get('href')
+                # RSS feeds use text content
                 elif link_tag.text and link_tag.text.strip():
                     link_str = link_tag.text.strip()
             
+            # Method 2: <guid> tag (if it's a URL)
             if not link_str:
                 guid_tag = entry.find('guid')
                 if guid_tag:
@@ -157,6 +359,7 @@ def parse_rss_robust(soup, source_code):
                     if guid_text.startswith('http'):
                         link_str = guid_text
             
+            # Method 3: <id> tag (Atom feeds)
             if not link_str:
                 id_tag = entry.find('id')
                 if id_tag:
@@ -164,15 +367,31 @@ def parse_rss_robust(soup, source_code):
                     if id_text.startswith('http'):
                         link_str = id_text
             
+            # Method 4: Extract from description/content
+            if not link_str:
+                desc_tag = entry.find('description') or entry.find('summary')
+                if desc_tag:
+                    import re
+                    urls = re.findall(r'href=["\']([^"\']+)["\']', str(desc_tag))
+                    if urls:
+                        link_str = urls[0]
+            
+            # Validate link
             if not link_str or not link_str.startswith('http'):
+                logging.debug(f"No valid link found for: {title[:50]}")
                 continue
-
-            # Image extraction
+            
+            # ============ IMAGE EXTRACTION ============
             image_url = None
+            
+            # Method 1: media:content
             media = entry.find('media:content')
             if media and media.get('url'):
-                image_url = media.get('url')
+                media_type = media.get('type', '')
+                if 'image' in media_type or not media_type:
+                    image_url = media.get('url')
             
+            # Method 2: enclosure
             if not image_url:
                 enclosure = entry.find('enclosure')
                 if enclosure and enclosure.get('url'):
@@ -180,58 +399,125 @@ def parse_rss_robust(soup, source_code):
                     if 'image' in enc_type or not enc_type:
                         image_url = enclosure.get('url')
             
+            # Method 3: media:thumbnail
             if not image_url:
                 thumb = entry.find('media:thumbnail')
                 if thumb and thumb.get('url'):
                     image_url = thumb.get('url')
             
-            # Summary
-            summary_text = ""
-            description = entry.find(['description', 'summary', 'content', 'content:encoded'])
-            if description:
-                summary_text = clean_text_extractor(description)
+            # Method 4: Extract from description/content
+            if not image_url:
+                content_tag = (
+                    entry.find('content:encoded') or 
+                    entry.find('description') or 
+                    entry.find('summary')
+                )
+                if content_tag:
+                    content_soup = BeautifulSoup(str(content_tag), 'html.parser')
+                    img_tag = content_soup.find('img')
+                    if img_tag:
+                        image_url = img_tag.get('src') or img_tag.get('data-src')
             
+            # ============ SUMMARY EXTRACTION ============
+            summary_text = ""
+            
+            # Try multiple content fields
+            description = (
+                entry.find('content:encoded') or
+                entry.find('description') or 
+                entry.find('summary') or 
+                entry.find('content')
+            )
+            
+            if description:
+                summary_text = clean_text_extractor(description, limit=400)
+            
+            # Fallback summary
             if not summary_text or len(summary_text) < 20:
-                summary_text = f"Read more about: {title_tag.text.strip()}"
-
-            # Category
-            cat_tag = entry.find(['category', 'dc:subject'])
+                summary_text = f"Read the full story about: {title}"
+            
+            # ============ CATEGORY EXTRACTION ============
             category = None
+            cat_tag = entry.find('category') or entry.find('dc:subject')
             if cat_tag:
-                category = cat_tag.get('term') or cat_tag.text
-
+                category = cat_tag.get('term') or cat_tag.text.strip()
+            
+            # ============ AUTHOR EXTRACTION ============
+            author = None
+            author_tag = (
+                entry.find('author') or 
+                entry.find('dc:creator') or 
+                entry.find('creator')
+            )
+            if author_tag:
+                # Handle <author><name>Text</name></author> structure
+                name_tag = author_tag.find('name')
+                if name_tag:
+                    author = name_tag.text.strip()
+                else:
+                    author = author_tag.text.strip()
+            
+            # ============ CREATE NEWS ITEM ============
             item = NewsItem(
-                title=title_tag.text.strip(),
+                title=title,
                 source=source_code,
                 article_url=link_str,
                 image_url=image_url,
                 summary_text=summary_text,
                 category=category,
-                publish_date=datetime.combine(pub_date, datetime.min.time()).replace(tzinfo=local_tz) if pub_date else None
+                author=author,
+                publish_date=pub_datetime
             )
+            
             items.append(item)
+            
         except Exception as e:
-            logging.debug(f"Failed to parse RSS entry: {e}")
+            logging.warning(f"Failed to parse RSS entry: {e}")
             continue
     
+    logging.info(f"Successfully parsed {len(items)} items from {source_code}")
     return items
 
 def fetch_rss(url, source_name, parser_func):
+    """
+    Fetch and parse RSS feed with circuit breaker pattern
+    """
     session = get_scraping_session()
     try:
-        r = session.get(url, timeout=25)
-        r.raise_for_status()
+        logging.debug(f"Fetching {source_name} from {url}")
         
+        response = session.get(url, timeout=25)
+        response.raise_for_status()
+        
+        # Try XML parser first (preferred for RSS/Atom)
         try:
-            soup = BeautifulSoup(r.content, "xml")
+            soup = BeautifulSoup(response.content, "xml")
+            # Verify it's actually XML
+            if not soup.find():
+                raise Exception("Not valid XML")
         except Exception:
-            soup = BeautifulSoup(r.content, "html.parser")
-            
+            # Fallback to HTML parser
+            logging.debug(f"XML parsing failed for {source_name}, trying HTML parser")
+            soup = BeautifulSoup(response.content, "html.parser")
+        
         items = parser_func(soup)
+        
+        # Record success with circuit breaker
         circuit_breaker.record_success(source_name)
+        
+        logging.info(f"[OK] {source_name}: Fetched {len(items)} items")
         return items
+        
+    except requests.exceptions.Timeout:
+        logging.error(f"[TIMEOUT] {source_name}: Request timed out")
+        circuit_breaker.record_failure(source_name)
+        return []
+    except requests.exceptions.RequestException as e:
+        logging.error(f"[ERROR] {source_name}: Request failed - {e}")
+        circuit_breaker.record_failure(source_name)
+        return []
     except Exception as e:
-        logging.error(f"{source_name} RSS fetch failed: {e}")
+        logging.error(f"[ERROR] {source_name}: Parsing failed - {e}")
         circuit_breaker.record_failure(source_name)
         return []
     finally:

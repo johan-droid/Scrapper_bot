@@ -215,3 +215,11 @@ user_data.json
 
 
 
+
+# --- Updated by Antigravity ---
+**/__pycache__/
+**/*.py[cod]
+.env.local
+.env.*.local
+*.swp
+logs/
