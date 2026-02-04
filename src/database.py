@@ -187,3 +187,79 @@ def update_telegraph_url(title, telegraph_url):
             .execute()
     except:
         pass
+
+def start_run_lock(date_obj, slot):
+    """
+    Attempts to start a run lock.
+    Returns run_id if successful, None if locked (already running/completed).
+    """
+    if not supabase: return "memory-lock"
+    
+    try:
+        # Try to insert a new run record
+        # This will fail if (date, slot) constraint is violated
+        data = {
+            "date": str(date_obj),
+            "slot": slot,
+            "status": "running",
+            "started_at": datetime.now(utc_tz).isoformat()
+        }
+        r = supabase.table("runs").insert(data).execute()
+        if r.data:
+            return r.data[0]['id']
+            
+    except Exception as e:
+        # If insertion failed, it likely means valid constraint violation (lock exists)
+        # Check if the existing run is "stuck" (e.g. older than 2 hours)
+        try:
+            r = supabase.table("runs")\
+                .select("id, status, started_at")\
+                .eq("date", str(date_obj))\
+                .eq("slot", slot)\
+                .limit(1)\
+                .execute()
+                
+            if r.data:
+                existing = r.data[0]
+                status = existing.get('status')
+                started_str = existing.get('started_at')
+                
+                # If completed, definitely don't run again
+                if status == 'completed':
+                    safe_log("info", f"[LOCK] Run for {date_obj} slot {slot} already COMPLETED.")
+                    return None
+                
+                # If running, check timeout
+                if status == 'running' and started_str:
+                    started_at = datetime.fromisoformat(started_str.replace('Z', '+00:00'))
+                    if datetime.now(utc_tz) - started_at > timedelta(hours=2):
+                        safe_log("warn", f"[LOCK] Found stale run (started {started_str}). Taking over.")
+                        # Update to current time and take over
+                        # Note: We return existing ID
+                        supabase.table("runs").update({
+                            "started_at": datetime.now(utc_tz).isoformat(),
+                            "status": "running"
+                        }).eq("id", existing['id']).execute()
+                        return existing['id']
+                    else:
+                        safe_log("info", f"[LOCK] Run in progress (started {started_str}). Skipping.")
+                        return None
+        except Exception as ex:
+             logging.error(f"Lock check failed: {ex}")
+             
+    return None
+
+def end_run_lock(run_id, status, posts_sent, source_counts, error=None):
+    if not supabase or not run_id or run_id == "memory-lock": return
+    
+    try:
+        data = {
+            "status": status,
+            "finished_at": datetime.now(utc_tz).isoformat(),
+            "posts_sent": posts_sent,
+            "source_counts": source_counts,
+            "error": str(error) if error else None
+        }
+        supabase.table("runs").update(data).eq("id", run_id).execute()
+    except Exception as e:
+        logging.error(f"Failed to release lock: {e}")

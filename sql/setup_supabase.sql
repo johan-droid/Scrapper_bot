@@ -44,7 +44,10 @@ CREATE TABLE IF NOT EXISTS posted_news (
     category TEXT,
     run_id BIGINT REFERENCES runs(id),
     slot INTEGER,
-    status TEXT DEFAULT 'sent'
+    status TEXT DEFAULT 'sent',
+    channel_type VARCHAR(20) DEFAULT 'anime',
+    article_url TEXT,
+    telegraph_url TEXT
 );
 
 -- Index for faster lookups on deduplication

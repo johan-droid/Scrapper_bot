@@ -15,7 +15,8 @@ from src.utils import safe_log, now_local, circuit_breaker, is_today_or_yesterda
 from src.database import (
     supabase, initialize_bot_stats, ensure_daily_row, load_posted_titles, 
     record_post, update_post_status, increment_post_counters, 
-    is_duplicate, normalize_title, update_telegraph_url
+    is_duplicate, normalize_title, update_telegraph_url,
+    start_run_lock, end_run_lock
 )
 from src.telegraph_client import TelegraphClient
 from src.scrapers import fetch_rss, parse_rss_robust, extract_full_article_content
@@ -395,55 +396,76 @@ def send_admin_report(status, posts_sent, source_counts, error=None):
 
 def run_once():
     """
-    Main execution with Telegraph integration
+    Main execution with Telegraph integration and Run Locking
     """
     dt = now_local()
     date_obj = dt.date()
     slot = dt.hour // 4
     
-    safe_log("info", f"\n{'='*60}")
-    safe_log("info", f"STARTING NEWS BOT RUN (Telegraph Enabled)")
-    safe_log("info", f"Date: {date_obj} | Slot: {slot} | Time: {dt.strftime('%I:%M %p IST')}")
-    safe_log("info", f"{'='*60}\n")
-    
-    if should_reset_daily_tracking():
-        safe_log("info", "NEW DAY DETECTED - Resetting daily tracking")
-    
-    initialize_bot_stats()
-    ensure_daily_row(date_obj)
-    
-    posted_set = load_posted_titles(date_obj)
-    all_items = []
-    
-    safe_log("info", "\nFETCHING NEWS FROM SOURCES...")
-    
-    # Fetch from RSS feeds
-    for code, url in RSS_FEEDS.items():
-        if circuit_breaker.can_call(code):
-            logging.info(f"  -> Fetching {code}...")
-            items = fetch_rss(url, code, lambda s: parse_rss_robust(s, code))
-            all_items.extend(items)
-            logging.info(f"    [OK] Found {len(items)} items")
+    # 1. Attempt to acquire run lock
+    run_id = start_run_lock(date_obj, slot)
+    if not run_id:
+        # Lock acquisition failed (already running or done)
+        return
 
-    safe_log("info", f"\nPOSTING TO TELEGRAM (with Telegraph)...")
+    run_status = "success"
+    run_error = None
     sent_count = 0
     source_counts = defaultdict(int)
-    
-    for item in all_items:
-        if not item.title: 
-            continue
-        
-        if item.publish_date and not is_today_or_yesterday(item.publish_date):
-            logging.debug(f"[SKIP] Skipping old news: {item.title[:50]}")
-            continue
-        
-        if send_to_telegram(item, slot, posted_set):
-            sent_count += 1
-            source_counts[item.source] += 1
-            time.sleep(2.0)  # Increased delay for Telegraph + Telegram posting
 
-    safe_log("info", f"\n{'='*60}")
-    safe_log("info", f"RUN COMPLETE - Sent: {sent_count} posts")
-    safe_log("info", f"{'='*60}\n")
-    
-    send_admin_report("success", sent_count, source_counts)
+    try:
+        safe_log("info", f"\n{'='*60}")
+        safe_log("info", f"STARTING NEWS BOT RUN (Telegraph Enabled) [Run ID: {run_id}]")
+        safe_log("info", f"Date: {date_obj} | Slot: {slot} | Time: {dt.strftime('%I:%M %p IST')}")
+        safe_log("info", f"{'='*60}\n")
+        
+        if should_reset_daily_tracking():
+            safe_log("info", "NEW DAY DETECTED - Resetting daily tracking")
+        
+        initialize_bot_stats()
+        ensure_daily_row(date_obj)
+        
+        posted_set = load_posted_titles(date_obj)
+        all_items = []
+        
+        safe_log("info", "\nFETCHING NEWS FROM SOURCES...")
+        
+        # Fetch from RSS feeds
+        for code, url in RSS_FEEDS.items():
+            if circuit_breaker.can_call(code):
+                logging.info(f"  -> Fetching {code}...")
+                items = fetch_rss(url, code, lambda s: parse_rss_robust(s, code))
+                all_items.extend(items)
+                logging.info(f"    [OK] Found {len(items)} items")
+
+        safe_log("info", f"\nPOSTING TO TELEGRAM (with Telegraph)...")
+        
+        for item in all_items:
+            if not item.title: 
+                continue
+            
+            if item.publish_date and not is_today_or_yesterday(item.publish_date):
+                logging.debug(f"[SKIP] Skipping old news: {item.title[:50]}")
+                continue
+            
+            if send_to_telegram(item, slot, posted_set):
+                sent_count += 1
+                source_counts[item.source] += 1
+                time.sleep(2.0)  # Increased delay for Telegraph + Telegram posting
+
+        safe_log("info", f"\n{'='*60}")
+        safe_log("info", f"RUN COMPLETE - Sent: {sent_count} posts")
+        safe_log("info", f"{'='*60}\n")
+        
+        # Send admin report
+        send_admin_report("success", sent_count, source_counts)
+
+    except Exception as e:
+        logging.error(f"Run failed with error: {e}")
+        run_status = "failed"
+        run_error = str(e)
+        send_admin_report("failure", sent_count, source_counts, error=e)
+        
+    finally:
+        # Release lock / Update run status
+        end_run_lock(run_id, run_status, sent_count, source_counts, run_error)

@@ -64,12 +64,23 @@ def now_local():
     return datetime.now(local_tz)
 
 def is_today_or_yesterday(dt_to_check):
+    """
+    Strictly checks if the date is TODAY in the local timezone (IST).
+    The user requested "NO old or previous day post".
+    Although the function name is 'is_today_or_yesterday' (kept for compatibility),
+    it now strictly allows ONLY today.
+    """
     if not dt_to_check:
         return False
+        
+    # User requested "Universal time" sync but context implies "Current Day" logic.
+    # We use local_tz (IST) as the primary timeline for "Today".
     today = now_local().date()
-    yesterday = today - timedelta(days=1)
+    
     check_date = dt_to_check.date() if isinstance(dt_to_check, datetime) else dt_to_check
-    return check_date in [today, yesterday]
+    
+    # STRICT MODE: Only allow today
+    return check_date == today
 
 def should_reset_daily_tracking():
     now = now_local()
