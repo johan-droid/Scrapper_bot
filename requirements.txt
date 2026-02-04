@@ -6,4 +6,8 @@ supabase>=2.27.0
 python-dotenv
 lxml
 httpx==0.27.2
+flask
+gunicorn
+apscheduler
+python-dateutil
 python-telegram-bot==20.7
