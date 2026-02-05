@@ -75,5 +75,16 @@ CREATE INDEX IF NOT EXISTS idx_posted_news_date ON posted_news (posted_date DESC
 CREATE INDEX IF NOT EXISTS idx_posted_news_status ON posted_news (status, posted_date);
 CREATE INDEX IF NOT EXISTS idx_runs_date_slot ON runs (date, slot);
 
--- 5. Force schema cache reload (Important for API)
+-- 5. Update Constraint for 2-Hour Slots (0-11)
+DO $$
+BEGIN
+    ALTER TABLE runs DROP CONSTRAINT IF EXISTS runs_slot_check;
+    ALTER TABLE runs ADD CONSTRAINT runs_slot_check CHECK (slot >= 0 AND slot <= 11);
+    RAISE NOTICE 'Updated runs_slot_check constraint';
+EXCEPTION
+    WHEN others THEN
+        RAISE NOTICE 'Constraint update skipped/failed: %', SQLERRM;
+END $$;
+
+-- 6. Force schema cache reload (Important for API)
 NOTIFY pgrst, 'reload config';
