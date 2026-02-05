@@ -229,7 +229,7 @@ def start_run_lock(date_obj, slot):
         data = {
             "date": str(date_obj),
             "slot": slot,
-            "status": "running",
+            "status": "started",
             "started_at": datetime.now(utc_tz).isoformat()
         }
         r = supabase.table("runs").insert(data).execute()
@@ -258,7 +258,7 @@ def start_run_lock(date_obj, slot):
                     return None
                 
                 # If running, check timeout
-                if status == 'running' and started_str:
+                if status == 'started' and started_str:
                     started_at = datetime.fromisoformat(started_str.replace('Z', '+00:00'))
                     if datetime.now(utc_tz) - started_at > timedelta(hours=2):
                         safe_log("warn", f"[LOCK] Found stale run (started {started_str}). Taking over.")
@@ -266,7 +266,7 @@ def start_run_lock(date_obj, slot):
                         # Note: We return existing ID
                         supabase.table("runs").update({
                             "started_at": datetime.now(utc_tz).isoformat(),
-                            "status": "running"
+                            "status": "started"
                         }).eq("id", existing['id']).execute()
                         return existing['id']
                     else:
