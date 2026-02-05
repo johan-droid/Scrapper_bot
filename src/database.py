@@ -238,8 +238,14 @@ def start_run_lock(date_obj, slot):
             
     except Exception as e:
         # If insertion failed, it likely means valid constraint violation (lock exists)
-        # Log it for debugging (debug level to avoid noise if common)
-        safe_log("debug", f"Run lock insert failed (likely exists): {e}")
+        # OR it means Schema Validation failed (400 Bad Request)
+        # Log detailed info to debug the 400 error
+        error_details = str(e)
+        if hasattr(e, 'response') and hasattr(e.response, 'text'):
+            error_details += f" | Body: {e.response.text}"
+        
+        safe_log("error", f"Run lock insert failed: {error_details}")
+        safe_log("debug", f"Payload used: {data}")
         
         # Check if the existing run is "stuck" (e.g. older than 2 hours)
         try:
