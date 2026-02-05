@@ -112,6 +112,13 @@ def create_telegraph_article(item: NewsItem):
             pub_date_full = item.publish_date.strftime("%A, %B %d, %Y at %I:%M %p %Z")
             footer_info.append(f'<p><strong>📅 Published:</strong> {pub_date_full}</p>')
         
+        # Explicit Credits Section
+        footer_info.append('<hr>')
+        footer_info.append('<h4>📝 Credits</h4>')
+        if item.author:
+            footer_info.append(f'<p><strong>Original Creator:</strong> {html.escape(item.author)}</p>')
+        footer_info.append(f'<p><strong>Source:</strong> {source_name}</p>')
+
         telegraph_html.extend(footer_info)
         
         # 7. Original Source Link (Call-to-Action)
@@ -286,14 +293,18 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
         logging.info(f"[BLOCKED] Skipping duplicate: {item.title[:50]}")
         return False
 
-    # Create Telegraph article (with rate limiting)
+    # Create Telegraph article (with fallback)
     try:
         telegraph_url = create_telegraph_article(item)
         if telegraph_url:
             item.telegraph_url = telegraph_url
             time.sleep(0.5)  # Brief delay after Telegraph creation
+        else:
+            logging.warning(f"[FALLBACK] Telegraph creation returned None for {item.title[:50]}, using original link")
+            item.telegraph_url = None
+            
     except Exception as e:
-        logging.warning(f"Telegraph creation error, using original link: {e}")
+        logging.warning(f"[FALLBACK] Telegraph error for {item.title[:50]}: {e}")
         item.telegraph_url = None
     
     # Get target channel
@@ -332,7 +343,7 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
         except Exception as e:
             logging.warning(f"[WARN] Image send exception: {e}")
 
-    # Fallback to text message
+    # Fallback to text message (STILL REQUIRES TELEGRAPH)
     if not success:
         try:
             response = sess.post(
