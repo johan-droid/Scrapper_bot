@@ -6,6 +6,12 @@
 -- 1. Safely add missing columns to 'posted_news'
 DO $$ 
 BEGIN 
+    -- Ensure daily_stats has updated_at
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='daily_stats' AND column_name='updated_at') THEN
+        ALTER TABLE daily_stats ADD COLUMN updated_at TIMESTAMPTZ DEFAULT NOW();
+        RAISE NOTICE 'Added updated_at column to daily_stats';
+    END IF;
+
     -- Add article_url (Original source URL)
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='posted_news' AND column_name='article_url') THEN
         ALTER TABLE posted_news ADD COLUMN article_url TEXT;
@@ -43,6 +49,12 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bot_stats' AND column_name='telegraph_token') THEN
         ALTER TABLE bot_stats ADD COLUMN telegraph_token TEXT;
         RAISE NOTICE 'Added telegraph_token column to bot_stats';
+    END IF;
+
+    -- Add updated_at if missing
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bot_stats' AND column_name='updated_at') THEN
+        ALTER TABLE bot_stats ADD COLUMN updated_at TIMESTAMPTZ DEFAULT NOW();
+        RAISE NOTICE 'Added updated_at column to bot_stats';
     END IF;
 END $$;
 
