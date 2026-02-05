@@ -27,9 +27,8 @@ jobs:
       - name: Run Scraper Bot
         env:
           # Supabase Configuration
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           
           # Telegram Configuration
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
@@ -38,7 +37,6 @@ jobs:
           ANIME_NEWS_CHANNEL_ID: ${{ secrets.ANIME_NEWS_CHANNEL_ID }}
           WORLD_NEWS_CHANNEL_ID: ${{ secrets.WORLD_NEWS_CHANNEL_ID }}
           TELEGRAPH_TOKEN: ${{ secrets.TELEGRAPH_TOKEN }}
-          DISABLE_PREVIEW: ${{ secrets.DISABLE_PREVIEW }}
           
         run: |
           python -m src.main

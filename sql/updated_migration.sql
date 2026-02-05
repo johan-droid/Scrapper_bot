@@ -31,6 +31,15 @@ BEGIN
     END IF;
 END $$;
 
+-- 1.5 Fix bot_stats table (Add missing column)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bot_stats' AND column_name='last_run_at') THEN
+        ALTER TABLE bot_stats ADD COLUMN last_run_at TIMESTAMPTZ DEFAULT NOW();
+        RAISE NOTICE 'Added last_run_at column to bot_stats';
+    END IF;
+END $$;
+
 -- 2. Ensure atomic increment functions are up to date
 CREATE OR REPLACE FUNCTION increment_daily_stats(row_date DATE)
 RETURNS VOID AS $$
@@ -88,3 +97,30 @@ END $$;
 
 -- 6. Force schema cache reload (Important for API)
 NOTIFY pgrst, 'reload config';
+
+-- 7. Add Auto-Cleanup Function (Optimized for Free Tier)
+-- Removes data older than 30 days to stay within 500MB limit
+CREATE OR REPLACE FUNCTION cleanup_old_data()
+RETURNS VOID AS $$
+BEGIN
+    -- Delete old posted news (keep last 30 days)
+    DELETE FROM posted_news 
+    WHERE posted_date < CURRENT_DATE - INTERVAL '30 days';
+    
+    -- Delete old world news posts
+    DELETE FROM world_news_posts 
+    WHERE posted_date < CURRENT_DATE - INTERVAL '30 days';
+
+    -- Delete old runs history
+    DELETE FROM runs 
+    WHERE date < CURRENT_DATE - INTERVAL '30 days';
+    
+    -- Delete old image processing logs
+    DELETE FROM image_processing_logs
+    WHERE created_at < NOW() - INTERVAL '30 days';
+    
+    -- Delete old channel metrics
+    DELETE FROM channel_metrics
+    WHERE date < CURRENT_DATE - INTERVAL '30 days';
+END;
+$$ LANGUAGE plpgsql;

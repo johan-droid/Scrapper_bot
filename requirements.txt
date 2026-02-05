@@ -5,7 +5,4 @@ pytz
 supabase>=2.27.0
 python-dotenv
 lxml
-pyTelegramBotAPI
-httpx
 python-dateutil
-psutil>=5.9.0

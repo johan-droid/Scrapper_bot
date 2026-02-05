@@ -51,21 +51,25 @@ def is_duplicate(title, url, posted_titles_set, date_check=True):
             return True
     
     # Reduced Supabase checks for 2-hour intervals - only check recent 3 days instead of 7
-    if supabase:
-        try:
-            past_date = str((now_local().date() - timedelta(days=3)))
-            r = supabase.table("posted_news")\
-                .select("normalized_title, posted_date")\
-                .eq("normalized_title", norm_title)\
-                .gte("posted_date", past_date)\
-                .limit(1)\
-                .execute()
-            
-            if r.data:
-                safe_log("info", f"DUPLICATE (Database): {title[:50]}")
-                return True
-        except Exception as e:
-            logging.warning(f"DB duplicate check failed: {e}")
+    # OPTIMIZATION: If we have posted_titles_set, we assume it's authoritative for the checked window.
+    # We skip the individual DB call to save "Select" quota on Free Tier.
+    # The load_posted_titles() function at start of run already populated the set.
+    
+    # if supabase:
+    #     try:
+    #         past_date = str((now_local().date() - timedelta(days=3)))
+    #         r = supabase.table("posted_news")\
+    #             .select("normalized_title, posted_date")\
+    #             .eq("normalized_title", norm_title)\
+    #             .gte("posted_date", past_date)\
+    #             .limit(1)\
+    #             .execute()
+    #         
+    #         if r.data:
+    #             safe_log("info", f"DUPLICATE (Database): {title[:50]}")
+    #             return True
+    #     except Exception as e:
+    #         logging.warning(f"DB duplicate check failed: {e}")
     
     for p_title in posted_titles_set:
          # Double check in set for fuzzy match again if needed or rely on above
@@ -343,3 +347,20 @@ def get_todays_posts_stats():
     except Exception as e:
         logging.error(f"Failed to fetch today's stats: {e}")
         return None
+
+def run_db_cleanup():
+    """
+    Calls the database RPC to clean up old data (logs, runs, posted items > 30 days).
+    This helps keep the database size within Supabase Free Tier limits.
+    """
+    if not supabase: return
+    try:
+        # Only run cleanup if it's the first slot of the day (approx) to save resources 
+        # But for simplicity in Cron, we can run it every time or check time.
+        # Since it's a lightweight delete query, running it on every cron (every 2h) is fine.
+        # It ensures we never accidentally grow too large.
+        supabase.rpc('cleanup_old_data').execute()
+        safe_log("info", "🧹 Database cleanup executed successfully")
+    except Exception as e:
+        # Don't fail the whole bot run for this
+        logging.warning(f"Database cleanup failed (non-critical): {e}")

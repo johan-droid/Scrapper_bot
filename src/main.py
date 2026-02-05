@@ -23,6 +23,11 @@ def main():
         # Run the scraping cycle once
         run_once()
         
+        # Run DB Cleanup (Optimized for Free Tier)
+        # We import here to avoid circular dependencies if any, though main imports database
+        from .database import run_db_cleanup
+        run_db_cleanup()
+        
         safe_log("info", f"\n{'='*70}")
         safe_log("info", "✅ CRON JOB COMPLETED SUCCESSFULLY")
         safe_log("info", f"{'='*70}\n")

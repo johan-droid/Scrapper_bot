@@ -586,8 +586,6 @@ def send_admin_report(status, posts_sent, source_counts, error=None):
         f"📰 <b>Source Breakdown</b>\n{source_stats}\n\n"
         
         f"🏥 <b>System Health</b>\n{health_status}\n\n"
-        
-        f"💡 Use /status for detailed statistics"
     )
 
     sess = get_fresh_telegram_session()
