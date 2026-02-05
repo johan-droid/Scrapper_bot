@@ -7,8 +7,5 @@ python-dotenv
 lxml
 pyTelegramBotAPI
 httpx
-flask
-gunicorn
-apscheduler
 python-dateutil
 psutil>=5.9.0
