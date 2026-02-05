@@ -238,6 +238,9 @@ def start_run_lock(date_obj, slot):
             
     except Exception as e:
         # If insertion failed, it likely means valid constraint violation (lock exists)
+        # Log it for debugging (debug level to avoid noise if common)
+        safe_log("debug", f"Run lock insert failed (likely exists): {e}")
+        
         # Check if the existing run is "stuck" (e.g. older than 2 hours)
         try:
             r = supabase.table("runs")\
@@ -253,8 +256,8 @@ def start_run_lock(date_obj, slot):
                 started_str = existing.get('started_at')
                 
                 # If completed, definitely don't run again
-                if status == 'completed':
-                    safe_log("info", f"[LOCK] Run for {date_obj} slot {slot} already COMPLETED.")
+                if status in ['success', 'failed', 'skipped', 'completed']:
+                    safe_log("info", f"[LOCK] Run for {date_obj} slot {slot} already finished (status: {status}).")
                     return None
                 
                 # If running, check timeout
