@@ -1,100 +1,32 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# Virtual Environments
-venv/
 env/
-ENV/
+venv/
 .env
-.venv
 .env.local
 .env.*.local
-.env.development
-.env.test
-.env.production
-.env.staging
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IDEs
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-*.sublime-project
-*.sublime-workspace
-
-# OS Generated Files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-desktop.ini
+.env.example
 
 # Logs
 logs/
 *.log
-*.log.*
 
 # Project Specific
-processed_images/
-temp_uploads/
-telegram_cache/
-bot_sessions/
-user_data.json
-*.sqlite
-*.sqlite3
 *.db
-cache/
+*.sqlite3
 temp/
 tmp/
 output.txt
+scrapper_bot.session
 
-# Previous Test/Demo Artifacts
-test_*.py
-demo_*.py
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+
+# IDE
+.vscode/
+.idea/

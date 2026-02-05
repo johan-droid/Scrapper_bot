@@ -42,7 +42,6 @@ jobs:
 
           ANIME_NEWS_CHANNEL_ID: ${{ secrets.ANIME_NEWS_CHANNEL_ID }}
           WORLD_NEWS_CHANNEL_ID: ${{ secrets.WORLD_NEWS_CHANNEL_ID }}
-          TELEGRAPH_TOKEN: ${{ secrets.TELEGRAPH_TOKEN }}
           ADMIN_ID: ${{ secrets.ADMIN_ID }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

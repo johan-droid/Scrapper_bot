@@ -38,6 +38,12 @@ BEGIN
         ALTER TABLE bot_stats ADD COLUMN last_run_at TIMESTAMPTZ DEFAULT NOW();
         RAISE NOTICE 'Added last_run_at column to bot_stats';
     END IF;
+
+    -- Add telegraph_token storage
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bot_stats' AND column_name='telegraph_token') THEN
+        ALTER TABLE bot_stats ADD COLUMN telegraph_token TEXT;
+        RAISE NOTICE 'Added telegraph_token column to bot_stats';
+    END IF;
 END $$;
 
 -- 2. Ensure atomic increment functions are up to date

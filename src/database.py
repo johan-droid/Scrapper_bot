@@ -103,6 +103,28 @@ def ensure_daily_row(date_obj):
     except Exception as e:
         logging.error(f"Failed to ensure daily row: {e}")
 
+def get_telegraph_token():
+    """Retrieve stored Telegraph token from database"""
+    if not supabase: return None
+    try:
+        r = supabase.table("bot_stats").select("telegraph_token").limit(1).execute()
+        if r.data and r.data[0].get('telegraph_token'):
+            return r.data[0]['telegraph_token']
+        return None
+    except Exception as e:
+        logging.warning(f"Failed to get telegraph token: {e}")
+        return None
+
+def save_telegraph_token(token):
+    """Store Telegraph token for future runs"""
+    if not supabase or not token: return
+    try:
+        # We assume row 1 exists (initialized by initialize_bot_stats)
+        supabase.table("bot_stats").update({"telegraph_token": token}).eq("id", 1).execute()
+        safe_log("info", "✅ Telegraph token saved to database for persistence")
+    except Exception as e:
+        logging.error(f"Failed to save telegraph token: {e}")
+
 def increment_post_counters(date_obj):
     if not supabase: return
     try:

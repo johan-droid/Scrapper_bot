@@ -20,8 +20,29 @@ from src.telegraph_client import TelegraphClient
 from src.scrapers import fetch_rss, parse_rss_robust, extract_full_article_content
 from src.models import NewsItem
 
-# Initialize Telegraph client
-telegraph = TelegraphClient(access_token=TELEGRAPH_TOKEN)
+# Initialize Telegraph Client with Persistence
+# 1. Try to get from Env (fallback)
+# 2. Try to get from Database (persistence)
+# 3. Create new if missing and save to DB
+telegraph_token = TELEGRAPH_TOKEN
+if not telegraph_token:
+    from src.database import get_telegraph_token, save_telegraph_token
+    stored_token = get_telegraph_token()
+    
+    if stored_token:
+        safe_log("info", "🔑 Loaded Telegraph token from database")
+        telegraph_token = stored_token
+    else:
+        safe_log("info", "🆕 No Telegraph token found. Creating new account...")
+        # Temp client to create account
+        temp_client = TelegraphClient()
+        if temp_client.access_token:
+            telegraph_token = temp_client.access_token
+            save_telegraph_token(telegraph_token)
+        else:
+            logging.warning("⚠️ Failed to auto-generate Telegraph token")
+
+telegraph = TelegraphClient(access_token=telegraph_token)
 
 # Scraper failure tracking
 scraper_failures = {}
