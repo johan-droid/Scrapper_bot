@@ -14,9 +14,7 @@ from src.config import (
 from src.utils import safe_log, now_local, circuit_breaker, is_today_or_yesterday, should_reset_daily_tracking, clean_text_extractor
 from src.database import (
     supabase, initialize_bot_stats, ensure_daily_row, load_posted_titles, 
-    record_post, update_post_status, increment_post_counters, 
-    is_duplicate, normalize_title, update_telegraph_url,
-    start_run_lock, end_run_lock
+    record_post, increment_post_counters, is_duplicate, start_run_lock, end_run_lock
 )
 from src.telegraph_client import TelegraphClient
 from src.scrapers import fetch_rss, parse_rss_robust, extract_full_article_content
@@ -24,6 +22,10 @@ from src.models import NewsItem
 
 # Initialize Telegraph client
 telegraph = TelegraphClient(access_token=TELEGRAPH_TOKEN)
+
+# Scraper failure tracking
+scraper_failures = {}
+scraper_successes = {}
 
 def get_fresh_telegram_session():
     """Create a fresh Telegram session with retries and proper configuration"""
@@ -52,7 +54,7 @@ def create_telegraph_article(item: NewsItem):
             logging.debug(f"No content extracted for {item.title}")
             return None
         
-        # Build Telegraph content with professional structure
+        # Build Telegraph content with profesional structure
         telegraph_html = []
         
         # 1. Hero Image Section (if available)
@@ -145,7 +147,7 @@ def get_target_channel(source):
     """Determine target Telegram channel based on source"""
     if source in WORLD_NEWS_SOURCES:
         if WORLD_NEWS_CHANNEL_ID:
-            safe_log("info", f"Routing {source} to WORLD_NEWS_CHANNEL")
+            safe_log("debug", f"Routing {source} to WORLD_NEWS_CHANNEL")
             return WORLD_NEWS_CHANNEL_ID
         else:
             logging.warning(f"[WARN] WORLD_NEWS_CHANNEL_ID not set! {source} going to fallback")
@@ -153,7 +155,7 @@ def get_target_channel(source):
     
     if source in ANIME_NEWS_SOURCES:
         if ANIME_NEWS_CHANNEL_ID:
-            safe_log("info", f"Routing {source} to ANIME_NEWS_CHANNEL")
+            safe_log("debug", f"Routing {source} to ANIME_NEWS_CHANNEL")
             return ANIME_NEWS_CHANNEL_ID
         else:
             return CHAT_ID or ANIME_NEWS_CHANNEL_ID
@@ -324,7 +326,6 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
                 retry_after = int(response.headers.get("Retry-After", 30))
                 logging.warning(f"[WAIT] Rate limited. Sleeping {retry_after}s")
                 time.sleep(retry_after)
-                # Don't retry here, will fall through to text
             else:
                 logging.warning(f"[WARN] Image send failed ({response.status_code}): {response.text[:200]}")
                 
@@ -376,7 +377,6 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
 
     # DB Operation: Only record if successful
     if success:
-        # One single write to DB
         record_post(
             title=item.title,
             source_code=item.source,
@@ -388,51 +388,105 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
             telegraph_url=item.telegraph_url
         )
         
-        # Increment counters (atomic)
         increment_post_counters(now_local().date())
-        
         return True
     else:
-        # We don't record failures to DB to save space/bandwidth
-        # Just return False so it might be retried next time (or skipped if cache persists)
         return False
 
-def send_scraper_failure_report(failed_scrapers, total_scrapers):
-    """Send detailed report about failed scrapers to admin"""
-    if not ADMIN_ID or not failed_scrapers:
+def send_scraper_failure_report(failed_scrapers, successful_scrapers, total_scrapers):
+    """
+    Send comprehensive scraper failure report to admin
+    ACTIVE: This is called after every cycle
+    """
+    if not ADMIN_ID or not BOT_TOKEN:
+        logging.warning("Admin ID or Bot Token not set - cannot send failure report")
+        return
+    
+    # Only send if there are failures OR if it's been requested
+    if not failed_scrapers and len(successful_scrapers) == total_scrapers:
+        logging.info("✅ All scrapers successful - no failure report needed")
         return
     
     dt = now_local()
     
-    # Build failure report
+    # Calculate statistics
+    failure_count = len(failed_scrapers)
+    success_count = len(successful_scrapers)
+    failure_rate = (failure_count / total_scrapers * 100) if total_scrapers > 0 else 0
+    success_rate = (success_count / total_scrapers * 100) if total_scrapers > 0 else 0
+    
+    # Build detailed failure information
     failure_details = []
     for scraper, error_info in failed_scrapers.items():
         source_label = SOURCE_LABEL.get(scraper, scraper)
-        failure_details.append(f"• <b>{source_label} ({scraper})</b>: {error_info}")
+        
+        # Circuit breaker status
+        cb_status = ""
+        if circuit_breaker.failure_counts.get(scraper, 0) >= circuit_breaker.failure_threshold:
+            cb_status = " 🔴 [CIRCUIT BREAKER OPEN]"
+        
+        failure_details.append(f"❌ <b>{source_label}</b>{cb_status}\n   └ {error_info}")
     
-    failure_rate = len(failed_scrapers) / total_scrapers * 100
+    # Build successful scrapers list (condensed)
+    if successful_scrapers:
+        success_list = []
+        for scraper, count in successful_scrapers.items():
+            source_label = SOURCE_LABEL.get(scraper, scraper)
+            success_list.append(f"• {source_label}: {count} items")
+        success_summary = "\n".join(success_list[:10])  # Limit to 10 for brevity
+        if len(successful_scrapers) > 10:
+            success_summary += f"\n• ... and {len(successful_scrapers) - 10} more"
+    else:
+        success_summary = "No successful scrapers"
+    
+    # Determine severity emoji
+    if failure_rate >= 50:
+        severity = "🚨 CRITICAL"
+    elif failure_rate >= 25:
+        severity = "⚠️ WARNING"
+    else:
+        severity = "ℹ️ NOTICE"
     
     report_msg = (
-        f"🚨 <b>Scraper Failure Report</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{severity} <b>Scraper Status Report</b>\n"
+        f"{'='*35}\n\n"
         
         f"📅 <b>Report Time</b>\n"
-        f"• {dt.strftime('%Y-%m-%d %H:%M:%S %Z')}\n\n"
+        f"• {dt.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+        f"• Slot: {dt.hour // 2}\n\n"
         
-        f"📊 <b>Failure Summary</b>\n"
-        f"• Failed Scrapers: <b>{len(failed_scrapers)}/{total_scrapers}</b>\n"
-        f"• Failure Rate: <b>{failure_rate:.1f}%</b>\n"
-        f"• Success Rate: <b>{100 - failure_rate:.1f}%</b>\n\n"
-        
-        f"🔍 <b>Failed Scrapers Details</b>\n"
-        f"{chr(10).join(failure_details)}\n\n"
-        
-        f"💡 <b>Recommendations</b>\n"
-        f"• Check RSS feed URLs\n"
-        f"• Verify source availability\n"
-        f"• Consider temporary removal if consistently failing"
+        f"📊 <b>Summary</b>\n"
+        f"• Total Scrapers: {total_scrapers}\n"
+        f"• ✅ Successful: <b>{success_count}</b> ({success_rate:.1f}%)\n"
+        f"• ❌ Failed: <b>{failure_count}</b> ({failure_rate:.1f}%)\n\n"
     )
     
+    if failed_scrapers:
+        report_msg += (
+            f"🔍 <b>Failed Scrapers</b>\n"
+            f"{chr(10).join(failure_details)}\n\n"
+        )
+    
+    if successful_scrapers:
+        report_msg += (
+            f"✅ <b>Successful Scrapers</b>\n"
+            f"{success_summary}\n\n"
+        )
+    
+    report_msg += (
+        f"💡 <b>Recommendations</b>\n"
+    )
+    
+    if failure_rate >= 50:
+        report_msg += "• ⚠️ Over 50% failure rate - check RSS URLs\n"
+        report_msg += "• Consider removing consistently failing sources\n"
+    elif failure_rate >= 25:
+        report_msg += "• Monitor failing sources\n"
+        report_msg += "• Check if RSS feeds have changed\n"
+    else:
+        report_msg += "• System operating normally\n"
+    
+    # Send report
     sess = get_fresh_telegram_session()
     try:
         response = sess.post(
@@ -457,12 +511,12 @@ def send_scraper_failure_report(failed_scrapers, total_scrapers):
 
 def send_admin_report(status, posts_sent, source_counts, error=None):
     """Send comprehensive admin report with Telegraph statistics"""
-    if not ADMIN_ID: 
+    if not ADMIN_ID or not BOT_TOKEN: 
         return
 
     dt = now_local()
     date_str = str(dt.date())
-    slot = dt.hour // 2  # Updated for 2-hour intervals
+    slot = dt.hour // 2
     
     # Calculate category breakdowns
     anime_posts = sum(count for source, count in source_counts.items() if source in ANIME_NEWS_SOURCES)
@@ -502,11 +556,11 @@ def send_admin_report(status, posts_sent, source_counts, error=None):
     # Build report
     report_msg = (
         f"🤖 <b>News Bot Status Report</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{'='*35}\n\n"
         
         f"📅 <b>Run Details</b>\n"
         f"• Date: {date_str}\n"
-        f"• Time Slot: {slot} ({dt.strftime('%I:%M %p %Z')}) - 2-hour interval\n"
+        f"• Time Slot: {slot} ({dt.strftime('%I:%M %p %Z')})\n"
         f"• Status: <b>{status.upper()}</b>\n\n"
         
         f"📊 <b>This Cycle</b>\n"
@@ -520,7 +574,9 @@ def send_admin_report(status, posts_sent, source_counts, error=None):
         
         f"📰 <b>Source Breakdown</b>\n{source_stats}\n\n"
         
-        f"🏥 <b>System Health</b>\n{health_status}"
+        f"🏥 <b>System Health</b>\n{health_status}\n\n"
+        
+        f"💡 Use /status for detailed statistics"
     )
 
     sess = get_fresh_telegram_session()
@@ -549,10 +605,17 @@ def run_once():
     """
     Main execution with Telegraph integration and comprehensive error handling
     Optimized for 2-hour intervals and reduced Supabase load
+    ACTIVE: Scraper fault detection and reporting
     """
+    global scraper_failures, scraper_successes
+    
     dt = now_local()
     date_obj = dt.date()
-    slot = dt.hour // 2  # Changed from 4 to 2 for 2-hour intervals
+    slot = dt.hour // 2
+    
+    # Reset scraper tracking
+    scraper_failures = {}
+    scraper_successes = {}
     
     # Attempt to acquire run lock
     run_id = start_run_lock(date_obj, slot)
@@ -570,7 +633,7 @@ def run_once():
         safe_log("info", f"🚀 STARTING NEWS BOT RUN (2-Hour Edition)")
         safe_log("info", f"{'='*70}")
         safe_log("info", f"📅 Date: {date_obj}")
-        safe_log("info", f"🕐 Slot: {slot} ({dt.strftime('%I:%M %p %Z')}) - 2-hour interval")
+        safe_log("info", f"🕐 Slot: {slot} ({dt.strftime('%I:%M %p %Z')})")
         safe_log("info", f"🆔 Run ID: {run_id}")
         safe_log("info", f"{'='*70}\n")
         
@@ -578,21 +641,17 @@ def run_once():
         if should_reset_daily_tracking():
             safe_log("info", "🔄 NEW DAY DETECTED - Resetting daily tracking")
         
-        # Initialize database with reduced frequency for Supabase efficiency
+        # Initialize database
         initialize_bot_stats()
         ensure_daily_row(date_obj)
         
-        # Load posted titles for deduplication (cache-friendly)
+        # Load posted titles for deduplication
         posted_set = load_posted_titles(date_obj)
         all_items = []
         
-        safe_log("info", "📡 FETCHING NEWS FROM SOURCES (Optimized for 2-hour cycle)...\n")
+        safe_log("info", "📡 FETCHING NEWS FROM SOURCES...\n")
         
-        # Track scraper performance
-        scraper_results = {}
-        failed_scrapers = {}
-        
-        # Fetch from all RSS feeds with enhanced efficiency
+        # Fetch from all RSS feeds with ACTIVE FAILURE TRACKING
         for code, url in RSS_FEEDS.items():
             if circuit_breaker.can_call(code):
                 source_label = SOURCE_LABEL.get(code, code)
@@ -603,54 +662,35 @@ def run_once():
                     
                     if items:
                         all_items.extend(items)
+                        scraper_successes[code] = len(items)
                         logging.info(f"    ✅ Found {len(items)} items")
-                        scraper_results[code] = {
-                            'status': 'success',
-                            'items_count': len(items),
-                            'source_label': source_label
-                        }
                     else:
                         logging.warning(f"    ⚠️  No items found")
-                        scraper_results[code] = {
-                            'status': 'no_items',
-                            'items_count': 0,
-                            'source_label': source_label
-                        }
-                        failed_scrapers[code] = "No items found in RSS feed"
+                        scraper_failures[code] = "No items found in RSS feed"
                         
                 except Exception as e:
                     logging.error(f"    ❌ Error fetching {source_label}: {e}")
-                    scraper_results[code] = {
-                        'status': 'error',
-                        'items_count': 0,
-                        'source_label': source_label,
-                        'error': str(e)
-                    }
-                    failed_scrapers[code] = f"Fetch error: {str(e)[:100]}"
+                    scraper_failures[code] = f"Fetch error: {str(e)[:100]}"
             else:
                 source_label = SOURCE_LABEL.get(code, code)
                 logging.warning(f"    🔴 Circuit breaker open for {source_label}")
-                scraper_results[code] = {
-                    'status': 'circuit_breaker',
-                    'items_count': 0,
-                    'source_label': source_label
-                }
-                failed_scrapers[code] = f"Circuit breaker open ({circuit_breaker.failure_counts.get(code, 0)} failures)"
+                scraper_failures[code] = f"Circuit breaker open ({circuit_breaker.failure_counts.get(code, 0)} failures)"
         
         # Log scraper performance summary
-        successful_scrapers = sum(1 for r in scraper_results.values() if r['status'] == 'success')
-        total_scrapers = len(scraper_results)
+        total_scrapers = len(RSS_FEEDS)
+        successful_scrapers = len(scraper_successes)
+        failed_scrapers = len(scraper_failures)
         success_rate = successful_scrapers / total_scrapers * 100
         
         safe_log("info", f"\n📊 SCRAPER PERFORMANCE SUMMARY:")
         safe_log("info", f"   ✅ Successful: {successful_scrapers}/{total_scrapers} ({success_rate:.1f}%)")
+        safe_log("info", f"   ❌ Failed: {failed_scrapers}/{total_scrapers}")
         safe_log("info", f"   📄 Total Items: {len(all_items)}")
         
-        # Send failure report if there are failed scrapers
-        if failed_scrapers and ADMIN_ID:
-            send_scraper_failure_report(failed_scrapers, total_scrapers)
+        # ACTIVE: Send failure report after every cycle
+        send_scraper_failure_report(scraper_failures, scraper_successes, total_scrapers)
 
-        safe_log("info", f"\n📤 POSTING TO TELEGRAM (with Telegraph)...\n")
+        safe_log("info", f"\n📤 POSTING TO TELEGRAM...\n")
         
         # Process and post items
         for item in all_items:
@@ -666,7 +706,7 @@ def run_once():
             if send_to_telegram(item, slot, posted_set):
                 sent_count += 1
                 source_counts[item.source] += 1
-                time.sleep(2.0)  # Rate limiting (Telegram + Telegraph)
+                time.sleep(2.0)  # Rate limiting
             else:
                 logging.warning(f"[FAIL] Could not send: {item.title[:50]}")
 
