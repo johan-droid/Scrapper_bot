@@ -1,9 +1,9 @@
 import logging
 import difflib
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from src.config import SUPABASE_URL, SUPABASE_KEY, WORLD_NEWS_SOURCES, ANIME_NEWS_SOURCES
-from src.utils import safe_log, now_local, utc_tz
+from src.utils import safe_log, now_local, utc_tz, local_tz
 
 try:
     from supabase import create_client, Client
@@ -226,9 +226,19 @@ def start_run_lock(date_obj, slot):
     try:
         # Try to insert a new run record
         # This will fail if (date, slot) constraint is violated
+        try:
+            # Calculate scheduled_at (IST -> UTC)
+            # Slot 0 = 00:00, Slot 1 = 02:00, etc.
+            scheduled_local = local_tz.localize(datetime.combine(date_obj, time(hour=slot*2, minute=0)))
+            scheduled_utc = scheduled_local.astimezone(utc_tz)
+        except Exception as e:
+            logging.warning(f"Failed to calculate scheduled_at: {e}")
+            scheduled_utc = datetime.now(utc_tz)
+
         data = {
             "date": str(date_obj),
             "slot": slot,
+            "scheduled_at": scheduled_utc.isoformat(),
             "status": "started",
             "started_at": datetime.now(utc_tz).isoformat()
         }
