@@ -280,8 +280,12 @@ def start_run_lock(date_obj, slot):
         if hasattr(e, 'response') and hasattr(e.response, 'text'):
             error_details += f" | Body: {e.response.text}"
         
-        safe_log("error", f"Run lock insert failed: {error_details}")
-        safe_log("debug", f"Payload used: {data}")
+        # Check for Duplicate Run (Constraint Violation)
+        if "23505" in str(e) or "runs_date_slot_key" in str(e):
+             safe_log("info", f"[LOCK] Run for {date_obj} slot {slot} already exists. Checking status...")
+        else:
+            safe_log("error", f"Run lock insert failed: {error_details}")
+            safe_log("debug", f"Payload used: {data}")
         
         # Check if the existing run is "stuck" (e.g. older than 2 hours)
         try:

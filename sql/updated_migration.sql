@@ -125,20 +125,27 @@ BEGIN
     DELETE FROM posted_news 
     WHERE posted_date < CURRENT_DATE - INTERVAL '30 days';
     
-    -- Delete old world news posts
-    DELETE FROM world_news_posts 
-    WHERE posted_date < CURRENT_DATE - INTERVAL '30 days';
-
     -- Delete old runs history
     DELETE FROM runs 
     WHERE date < CURRENT_DATE - INTERVAL '30 days';
+
+    -- Optional tables cleanup (ignore if they don't exist)
+    BEGIN
+        DELETE FROM world_news_posts 
+        WHERE posted_date < CURRENT_DATE - INTERVAL '30 days';
+    EXCEPTION WHEN UNDEFINED_TABLE THEN NULL;
+    END;
+
+    BEGIN
+        DELETE FROM image_processing_logs
+        WHERE created_at < NOW() - INTERVAL '30 days';
+    EXCEPTION WHEN UNDEFINED_TABLE THEN NULL;
+    END;
     
-    -- Delete old image processing logs
-    DELETE FROM image_processing_logs
-    WHERE created_at < NOW() - INTERVAL '30 days';
-    
-    -- Delete old channel metrics
-    DELETE FROM channel_metrics
-    WHERE date < CURRENT_DATE - INTERVAL '30 days';
+    BEGIN
+        DELETE FROM channel_metrics
+        WHERE date < CURRENT_DATE - INTERVAL '30 days';
+    EXCEPTION WHEN UNDEFINED_TABLE THEN NULL;
+    END;
 END;
 $$ LANGUAGE plpgsql;
