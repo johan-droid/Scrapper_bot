@@ -135,8 +135,8 @@ CREATE OR REPLACE FUNCTION increment_bot_stats()
 RETURNS VOID AS $$
 BEGIN
     -- Using specific ID 1 for single bot stats row
-    INSERT INTO bot_stats (id, total_posts_all_time, last_run_at)
-    VALUES (1, 1, NOW())
+    INSERT INTO bot_stats (id, total_posts_all_time, last_run_at, bot_started_at)
+    VALUES (1, 1, NOW(), NOW())
     ON CONFLICT (id) DO UPDATE SET 
         total_posts_all_time = bot_stats.total_posts_all_time + 1,
         last_run_at = NOW(),

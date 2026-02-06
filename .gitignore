@@ -8,7 +8,6 @@ venv/
 .env
 .env.local
 .env.*.local
-.env.example
 
 # Logs
 logs/
@@ -20,7 +19,7 @@ logs/
 temp/
 tmp/
 output.txt
-scrapper_bot.session
+*.session
 
 # Testing
 .pytest_cache/
@@ -30,3 +29,10 @@ htmlcov/
 # IDE
 .vscode/
 .idea/
+
+# OS Specific
+.DS_Store
+Thumbs.db
+
+# Tools
+.mypy_cache/
