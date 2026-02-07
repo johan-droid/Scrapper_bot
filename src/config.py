@@ -68,7 +68,7 @@ RSS_FEEDS = {
     
     # Additional reliable sources
     "NYP": "https://nypost.com/feed/",
-    "LATIMES": "https://www.latimes.com/world-nation/rss", # Updated URL
+    "LATIMES": "https://www.latimes.com/world-nation/rss2.0.xml", # Updated URL
     # "CHICAGO": "https://www.chicagotribune.com/news.rss", # 404 / Paywall
     "MIRROR": "https://www.mirror.co.uk/news/world-news/rss.xml",
     "INDEPENDENT": "https://www.independent.co.uk/rss", # Updated URL

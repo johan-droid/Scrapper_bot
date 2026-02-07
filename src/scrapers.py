@@ -630,7 +630,11 @@ def fetch_rss(url, source_name, parser_func):
         if not soup:
             raise Exception("All parsing attempts failed")
         
-        items = parser_func(soup)
+        # Try calling with source_name first (for robust parser), fall back if it fails
+        try:
+            items = parser_func(soup, source_name)
+        except TypeError:
+            items = parser_func(soup)
         
         # Record success with circuit breaker
         circuit_breaker.record_success(source_name)

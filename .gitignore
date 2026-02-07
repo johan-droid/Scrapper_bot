@@ -19,7 +19,12 @@ logs/
 temp/
 tmp/
 output.txt
+output.txt
 *.session
+test_*.py
+*.spec
+dist/
+build/
 
 # Testing
 .pytest_cache/
