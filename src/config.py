@@ -64,14 +64,14 @@ RSS_FEEDS = {
     # Premium reliable sources
     "BLOOMBERG": "https://feeds.bloomberg.com/markets/news.rss",
     "FINANCIAL": "https://www.ft.com/rss/world",
-    "REUTERS": "https://www.reuters.com/rssFeed/worldNews",
+    # "REUTERS": "https://www.reuters.com/rssFeed/worldNews", # Strictly blocks bots (401)
     
     # Additional reliable sources
     "NYP": "https://nypost.com/feed/",
-    "LATIMES": "https://www.latimes.com/world-nation/story.rss",
-    "CHICAGO": "https://www.chicagotribune.com/news.rss",
+    "LATIMES": "https://www.latimes.com/world-nation/rss", # Updated URL
+    # "CHICAGO": "https://www.chicagotribune.com/news.rss", # 404 / Paywall
     "MIRROR": "https://www.mirror.co.uk/news/world-news/rss.xml",
-    "INDEPENDENT": "https://www.independent.co.uk/news/world/rss.xml",
+    "INDEPENDENT": "https://www.independent.co.uk/rss", # Updated URL
 }
 
 # Channel routing

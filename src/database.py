@@ -50,31 +50,29 @@ def is_duplicate(title, url, posted_titles_set, date_check=True):
             safe_log("info", f"DUPLICATE (Fuzzy {dist:.2%}): {title[:50]}")
             return True
     
+    
     # Reduced Supabase checks for 2-hour intervals - only check recent 3 days instead of 7
     # OPTIMIZATION: If we have posted_titles_set, we assume it's authoritative for the checked window.
-    # We skip the individual DB call to save "Select" quota on Free Tier.
-    # The load_posted_titles() function at start of run already populated the set.
+    # However, to prevent "23505 duplicate key value" errors for older items not in cache,
+    # we MUST check the DB if it's not in our short-term cache.
     
-    # if supabase:
-    #     try:
-    #         past_date = str((now_local().date() - timedelta(days=3)))
-    #         r = supabase.table("posted_news")\
-    #             .select("normalized_title, posted_date")\
-    #             .eq("normalized_title", norm_title)\
-    #             .gte("posted_date", past_date)\
-    #             .limit(1)\
-    #             .execute()
-    #         
-    #         if r.data:
-    #             safe_log("info", f"DUPLICATE (Database): {title[:50]}")
-    #             return True
-    #     except Exception as e:
-    #         logging.warning(f"DB duplicate check failed: {e}")
+    if supabase:
+        try:
+            # Check if it exists in DB (even if older than cache window)
+            r = supabase.table("posted_news")\
+                .select("normalized_title")\
+                .eq("normalized_title", norm_title)\
+                .limit(1)\
+                .execute()
+            
+            if r.data:
+                safe_log("info", f"DUPLICATE (Database): {title[:50]}")
+                # Add to local cache to save future queries
+                posted_titles_set.add(norm_title)
+                return True
+        except Exception as e:
+            logging.warning(f"DB duplicate check failed: {e}")
     
-    for p_title in posted_titles_set:
-         # Double check in set for fuzzy match again if needed or rely on above
-         pass
-
     return False
 
 def initialize_bot_stats():

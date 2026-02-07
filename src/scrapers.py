@@ -532,7 +532,8 @@ def fetch_rss(url, source_name, parser_func):
         
         # First attempt: Standard request
         try:
-            response = session.get(url, timeout=25)
+            # Increased timeout for reliability
+            response = session.get(url, timeout=30)
             response.raise_for_status()
             content = response.content
         except Exception as e:
@@ -544,9 +545,11 @@ def fetch_rss(url, source_name, parser_func):
                     session.headers.update({
                         'User-Agent': 'Mozilla/5.0 (compatible; RSS-Reader/1.0)',
                         'Accept': 'application/rss+xml, application/xml, text/xml',
-                        'Cache-Control': 'no-cache'
+                        'Cache-Control': 'no-cache',
+                        'Upgrade-Insecure-Requests': '1'
                     })
-                    response = session.get(url, timeout=30)
+                    # Drastically increased timeout for slow Indian servers
+                    response = session.get(url, timeout=60)
                     response.raise_for_status()
                     content = response.content
                     logging.info(f"Fallback request succeeded for {source_name}")
