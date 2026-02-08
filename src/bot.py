@@ -312,7 +312,7 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
     # Spam detection (triple-layer check)
     if is_duplicate(item.title, item.article_url, posted_set):
         logging.info(f"[BLOCKED] Skipping duplicate: {item.title[:50]}")
-        return False
+        return 'duplicate'
 
     # Create Telegraph article (with fallback)
     try:
@@ -421,9 +421,9 @@ def send_to_telegram(item: NewsItem, slot, posted_set):
         )
         
         increment_post_counters(now_local().date())
-        return True
+        return 'sent'
     else:
-        return False
+        return 'failed'
 
 def send_scraper_failure_report(failed_scrapers, successful_scrapers, total_scrapers):
     """
@@ -732,13 +732,16 @@ def run_once():
                 logging.debug(f"[SKIP] Old news ({item.publish_date.date()}): {item.title[:50]}")
                 continue
             
-            # Attempt to send
-            if send_to_telegram(item, slot, posted_set):
+    # Attempt to send
+            status = send_to_telegram(item, slot, posted_set)
+            
+            if status == 'sent':
                 sent_count += 1
                 source_counts[item.source] += 1
                 time.sleep(2.0)  # Rate limiting
-            else:
+            elif status == 'failed':
                 logging.warning(f"[FAIL] Could not send: {item.title[:50]}")
+            # If status == 'duplicate', we do nothing (it's already logged in send_to_telegram)
 
         safe_log("info", f"\n{'='*70}")
         safe_log("info", f"✅ RUN COMPLETE")

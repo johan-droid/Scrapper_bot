@@ -542,9 +542,10 @@ def fetch_rss(url, source_name, parser_func):
             # Second attempt: With different headers for problematic sites
             if source_name in ['ANI', 'HONEY', 'WIRE', 'SCROLL', 'PRINT']:
                 try:
+                    # Use a real browser User-Agent to avoid blocking
                     session.headers.update({
-                        'User-Agent': 'Mozilla/5.0 (compatible; RSS-Reader/1.0)',
-                        'Accept': 'application/rss+xml, application/xml, text/xml',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                         'Cache-Control': 'no-cache',
                         'Upgrade-Insecure-Requests': '1'
                     })
