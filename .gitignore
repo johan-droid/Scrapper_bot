@@ -13,15 +13,31 @@ venv/
 logs/
 *.log
 
-# Project Specific
+# Project Specific - Anime News Bot
 *.db
 *.sqlite3
 temp/
 tmp/
 output.txt
-output.txt
 *.session
-test_*.py
+
+# Test files (anime bot specific)
+test_scrapers.py
+test_scraper_failures.py
+test_bot_complete.py
+test_2hour_scheduler.py
+demo_failure_report.py
+test_anime_only_bot.py
+test_new_format.py
+quick_test.py
+integration_example.py
+setup_telegram_bot.py
+telegram_integration_test.py
+test_alternative_feeds.py
+rss_news_bot.py
+telegram_rss_bot.py
+
+# Build artifacts
 *.spec
 dist/
 build/
@@ -41,3 +57,10 @@ Thumbs.db
 
 # Tools
 .mypy_cache/
+
+# SQL migration files (keep only final version)
+sql/update_schema_anime_only.sql
+sql/update_schema_anime_only_fixed.sql
+
+# Keep only the final SQL schema
+!sql/update_schema_final_complete.sql

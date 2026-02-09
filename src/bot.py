@@ -7,9 +7,9 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from src.config import (
-    BOT_TOKEN, CHAT_ID, WORLD_NEWS_CHANNEL_ID, ANIME_NEWS_CHANNEL_ID, 
-    ADMIN_ID, ANIME_NEWS_SOURCES, WORLD_NEWS_SOURCES, SOURCE_LABEL, 
-    RSS_FEEDS, TELEGRAPH_TOKEN, DISABLE_PREVIEW
+    BOT_TOKEN, ANIME_NEWS_CHANNEL_ID, 
+    ADMIN_ID, ANIME_NEWS_SOURCES, SOURCE_LABEL, 
+    RSS_FEEDS, TELEGRAPH_TOKEN, DISABLE_PREVIEW, COPYRIGHT_DISCLAIMER
 )
 from src.utils import safe_log, now_local, circuit_breaker, is_today_or_yesterday, should_reset_daily_tracking, clean_text_extractor
 from src.database import (
@@ -146,6 +146,14 @@ def create_telegraph_article(item: NewsItem):
         telegraph_html.append('<br>')
         telegraph_html.append(f'<p><a href="{item.article_url}">🔗 <strong>View Original Article</strong></a></p>')
         
+        # 8. Copyright Disclaimer
+        telegraph_html.append('<hr>')
+        telegraph_html.append('<p><em>📝 <strong>Disclaimer:</strong> This content is for informational purposes only. All copyrights belong to respective owners.</em></p>')
+        
+        # 9. Professional Footer
+        telegraph_html.append('<hr>')
+        telegraph_html.append('<p><strong>🔔 Follow for more anime insights and updates!</strong></p>')
+        
         # Create Telegraph page
         content_html = '\n'.join(telegraph_html)
         
@@ -172,135 +180,106 @@ def create_telegraph_article(item: NewsItem):
         return None
 
 def get_target_channel(source):
-    """Determine target Telegram channel based on source"""
-    if source in WORLD_NEWS_SOURCES:
-        if WORLD_NEWS_CHANNEL_ID:
-            safe_log("debug", f"Routing {source} to WORLD_NEWS_CHANNEL")
-            return WORLD_NEWS_CHANNEL_ID
-        else:
-            logging.warning(f"[WARN] WORLD_NEWS_CHANNEL_ID not set! {source} going to fallback")
-            return CHAT_ID or ANIME_NEWS_CHANNEL_ID
-    
+    """Determine target Telegram channel - Anime only"""
     if source in ANIME_NEWS_SOURCES:
         if ANIME_NEWS_CHANNEL_ID:
             safe_log("debug", f"Routing {source} to ANIME_NEWS_CHANNEL")
             return ANIME_NEWS_CHANNEL_ID
         else:
-            return CHAT_ID or ANIME_NEWS_CHANNEL_ID
+            logging.warning(f"[WARN] ANIME_NEWS_CHANNEL_ID not set! {source} cannot be posted")
+            return None
     
-    logging.warning(f"[WARN] Unknown source {source}, using fallback channel")
-    return CHAT_ID or ANIME_NEWS_CHANNEL_ID
+    logging.warning(f"[WARN] Unknown source {source}, cannot post")
+    return None
 
 def format_news_message(item: NewsItem):
     """
-    Format news message with professional, distinct styles for Anime and World news
-    Both styles are now consistent with Telegraph integration
+    Format anime news message with professional style inspired by Otaku_Insight
+    Includes author details, date, time, and proper formatting
     """
     source_name = SOURCE_LABEL.get(item.source, item.source)
     
     # Escape HTML special characters
     title = html.escape(str(item.title or "No Title"), quote=False)
     
-    # Clean and truncate summary
-    raw_summary = str(item.summary_text or "Read the full story below!")
-    clean_summary = clean_text_extractor(raw_summary, limit=400)
+    # Clean and truncate summary to 2-3 lines maximum (150 chars)
+    raw_summary = str(item.summary_text or "Read the full article for complete details and insights.")
+    clean_summary = clean_text_extractor(raw_summary, limit=150)
     summary = html.escape(clean_summary, quote=False)
     
-    # Format publish date
+    # Format publish date and time professionally
     if item.publish_date:
         date_str = item.publish_date.strftime("%B %d, %Y")
-        time_str = item.publish_date.strftime("%I:%M %p %Z")
+        time_str = item.publish_date.strftime("%I:%M %p UTC")
+        day_of_week = item.publish_date.strftime("%A")
     else:
         date_str = "Recently"
         time_str = ""
+        day_of_week = ""
     
     # Category formatting
     category_str = ""
     if item.category:
         cat = html.escape(str(item.category), quote=False)
-        category_str = f"🏷️ <b>Category:</b> {cat}"
+        category_str = f"🏷️ <b>{cat}</b>"
     
-    # --- ANIME NEWS STYLE ---
-    if item.source in ANIME_NEWS_SOURCES:
-        header = "✨ <b>ANIME NEWS UPDATE</b> ✨"
-        
-        msg_parts = [
-            header,
-            "",
-            f"📰 <b>{title}</b>",
-            "",
-            f"<i>{summary}</i>",
-            "",
-            "━━━━━━━━━━━━━━━━━━━━━━━",
-        ]
-        
-        # Metadata section
-        metadata = [f"📡 <b>Source:</b> {source_name}"]
-        if category_str:
-            metadata.append(category_str)
-        if item.author:
-            author = html.escape(str(item.author), quote=False)
-            metadata.append(f"✍️ <b>By:</b> {author}")
-        
-        msg_parts.append(" | ".join(metadata))
-        
-        # Date/Time
-        if time_str:
-            msg_parts.append(f"📅 {date_str} • 🕐 {time_str}")
-        else:
-            msg_parts.append(f"📅 {date_str}")
-        
-        msg_parts.append("")
-        
-        # Call-to-Action with Telegraph priority
-        if item.telegraph_url:
-            msg_parts.append("━━━━━━━━━━━━━━━━━━━━━━━")
-            msg_parts.append(f"📖 <a href='{item.telegraph_url}'><b>READ FULL ARTICLE</b></a> (Ad-Free)")
-            msg_parts.append(f"🔗 <a href='{html.escape(item.article_url, quote=True)}'>Original Source</a>")
-        else:
-            msg_parts.append("━━━━━━━━━━━━━━━━━━━━━━━")
-            msg_parts.append(f"📖 <a href='{html.escape(item.article_url, quote=True)}'><b>READ FULL ARTICLE</b></a>")
+    # Professional header with emoji
+    header = "🌸 <b>OTAKU INSIGHT</b> 🌸"
     
-    # --- WORLD NEWS STYLE ---
+    # Build message with professional structure
+    msg_parts = [
+        header,
+        "",
+        f"📰 <b>{title}</b>",
+        "",
+        f"<i>{summary}</i>",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━",
+    ]
+    
+    # Author and source information (prominent)
+    if item.author:
+        author = html.escape(str(item.author), quote=False)
+        msg_parts.append(f"✍️ <b>Author:</b> {author}")
+    
+    msg_parts.append(f"📡 <b>Source:</b> {source_name}")
+    
+    # Date and time information
+    if day_of_week:
+        msg_parts.append(f"📅 <b>Date:</b> {day_of_week}, {date_str}")
     else:
-        header = "🌍 <b>WORLD NEWS BRIEFING</b> 🌍"
-        
-        msg_parts = [
-            header,
-            "",
-            f"<b>{title}</b>",
-            "",
-            f"<i>{summary}</i>",
-            "",
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        ]
-        
-        # Metadata
-        msg_parts.append(f"🏛️ <b>Source:</b> {source_name}")
-        
-        if category_str:
-            msg_parts.append(category_str)
-        
-        if item.author:
-            author = html.escape(str(item.author), quote=False)
-            msg_parts.append(f"✍️ <b>Reported By:</b> {author}")
-        
-        # Date/Time
-        if time_str:
-            msg_parts.append(f"📅 {date_str} at {time_str}")
-        else:
-            msg_parts.append(f"📅 {date_str}")
-        
-        msg_parts.append("")
-        
-        # Call-to-Action
-        if item.telegraph_url:
-            msg_parts.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            msg_parts.append(f"📰 <a href='{item.telegraph_url}'><b>Read Full Coverage</b></a> (Clean Format)")
-            msg_parts.append(f"🔗 <a href='{html.escape(item.article_url, quote=True)}'>Original Article</a>")
-        else:
-            msg_parts.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            msg_parts.append(f"📰 <a href='{html.escape(item.article_url, quote=True)}'><b>Read Full Coverage</b></a>")
+        msg_parts.append(f"📅 <b>Date:</b> {date_str}")
+    
+    if time_str:
+        msg_parts.append(f"🕐 <b>Time:</b> {time_str}")
+    
+    # Category if available
+    if category_str:
+        msg_parts.append(category_str)
+    
+    msg_parts.append("")
+    
+    # Call-to-Action with Telegraph priority
+    if item.telegraph_url:
+        msg_parts.extend([
+            "━━━━━━━━━━━━━━━━━━━━━━━",
+            f"📖 <a href='{item.telegraph_url}'><b>READ FULL ARTICLE</b></a> 📚",
+            f"🔗 <a href='{html.escape(item.article_url, quote=True)}'><b>Original Source</b></a>"
+        ])
+    else:
+        msg_parts.extend([
+            "━━━━━━━━━━━━━━━━━━━━━━━",
+            f"📖 <a href='{html.escape(item.article_url, quote=True)}'><b>READ FULL ARTICLE</b></a> 📚"
+        ])
+    
+    # Professional footer with copyright
+    msg_parts.extend([
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━",
+        "📝 <i>This content is for informational purposes only. All copyrights belong to respective owners.</i>",
+        "",
+        f"<b>🔔 Follow for more anime updates!</b>"
+    ])
     
     return "\n".join(msg_parts)
 
@@ -550,9 +529,9 @@ def send_admin_report(status, posts_sent, source_counts, error=None):
     date_str = str(dt.date())
     slot = dt.hour // 2
     
-    # Calculate category breakdowns
+    # Calculate category breakdowns (anime only)
     anime_posts = sum(count for source, count in source_counts.items() if source in ANIME_NEWS_SOURCES)
-    world_posts = sum(count for source, count in source_counts.items() if source in WORLD_NEWS_SOURCES)
+    world_posts = 0  # No longer tracking world news
     
     # Get daily and all-time totals from database
     daily_total = 0
@@ -598,7 +577,7 @@ def send_admin_report(status, posts_sent, source_counts, error=None):
         f"📊 <b>This Cycle</b>\n"
         f"• Posts Sent: <b>{posts_sent}</b>\n"
         f"• Anime News: {anime_posts}\n"
-        f"• World News: {world_posts}\n\n"
+        f"• World News: Disabled\n\n"
         
         f"📈 <b>Cumulative Stats</b>\n"
         f"• Today's Total: <b>{daily_total}</b>\n"

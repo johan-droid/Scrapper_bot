@@ -2,7 +2,7 @@ import logging
 import difflib
 import re
 from datetime import datetime, timedelta, time
-from src.config import SUPABASE_URL, SUPABASE_KEY, WORLD_NEWS_SOURCES, ANIME_NEWS_SOURCES
+from src.config import SUPABASE_URL, SUPABASE_KEY, ANIME_NEWS_SOURCES
 from src.utils import safe_log, now_local, utc_tz, local_tz
 
 try:
@@ -179,10 +179,8 @@ def record_post(title, source_code, article_url, slot, posted_titles_set, catego
     key = normalize_title(title)
     date_obj = now_local().date()
     
-    if source_code in WORLD_NEWS_SOURCES:
-        channel_type = 'world'
-    else:
-        channel_type = 'anime'
+    # All posts are now anime only
+    channel_type = 'anime'
     
     if supabase:
         try:
