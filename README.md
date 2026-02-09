@@ -1,14 +1,14 @@
-# Anime & World News Bot 📰
+# Anime News Bot 🌸
 
-A **production-ready** Telegram news bot optimized for Heroku 1x dyno that delivers **ad-free, full-article content** using Telegraph integration. Features **2-hour interval scraping**, **active fault detection**, **admin commands**, and comprehensive compliance with all platform policies.
+A **production-ready** Telegram anime news bot that delivers **ad-free, full-article content** using Telegraph integration. Features **2-hour interval scraping**, **active fault detection**, **admin commands**, and comprehensive compliance with all platform policies.
 
 ## ✨ Key Features
 
 ### 🤖 Bot Capabilities
+- **Anime-Only Content**: Focused exclusively on anime and manga news
 - **Telegraph Integration**: Full articles, ad-free, instant loading
-- **Unified Professional Format**: Consistent design for all news sources
-- **Smart Content Extraction**: Optimized selectors for BBC, CNN, ANN, etc.
-- **2-Hour Interval Scraping**: Automated news updates every 2 hours
+- **Professional Format**: Otaku Insight style with metadata and copyright
+- **2-Hour Interval Scraping**: Automated anime news updates every 2 hours
 - **Active Fault Detection**: Real-time scraper monitoring and reporting
 - **Admin Commands**: Full control via Telegram commands
 
@@ -17,6 +17,7 @@ A **production-ready** Telegram news bot optimized for Heroku 1x dyno that deliv
 - **Robust Error Handling**: Automatic retries and graceful degradation
 - **Database Deduplication**: Prevent duplicate posts
 - **Comprehensive Logging**: Full audit trail
+- **Date Parsing Fix**: Handles various ISO 8601 formats robustly
 
 ### 🎯 Admin Features
 - **`/start`** - Bot information and status
@@ -57,7 +58,6 @@ Required variables:
 ```env
 BOT_TOKEN=your_telegram_bot_token
 ANIME_NEWS_CHANNEL_ID=-100...
-WORLD_NEWS_CHANNEL_ID=-100...
 ADMIN_ID=your_telegram_user_id
 ```
 
