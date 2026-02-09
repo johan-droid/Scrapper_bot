@@ -29,6 +29,7 @@ test_2hour_scheduler.py
 demo_failure_report.py
 test_anime_only_bot.py
 test_new_format.py
+test_date_fix.py
 quick_test.py
 integration_example.py
 setup_telegram_bot.py

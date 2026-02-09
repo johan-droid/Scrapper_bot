@@ -304,19 +304,44 @@ def start_run_lock(date_obj, slot):
                 
                 # If running, check timeout
                 if status == 'started' and started_str:
-                    started_at = datetime.fromisoformat(started_str.replace('Z', '+00:00'))
-                    if datetime.now(utc_tz) - started_at > timedelta(hours=2):
-                        safe_log("warn", f"[LOCK] Found stale run (started {started_str}). Taking over.")
-                        # Update to current time and take over
-                        # Note: We return existing ID
+                    try:
+                        # Handle different ISO format variations
+                        if started_str.endswith('Z'):
+                            started_at = datetime.fromisoformat(started_str.replace('Z', '+00:00'))
+                        elif '+' in started_str or '-' in started_str:
+                            # Already has timezone info
+                            started_at = datetime.fromisoformat(started_str)
+                        else:
+                            # No timezone info, assume UTC
+                            started_at = datetime.fromisoformat(started_str + '+00:00')
+                        
+                        # Ensure timezone awareness for comparison
+                        if started_at.tzinfo is None:
+                            started_at = utc_tz.localize(started_at)
+                        elif started_at.tzinfo != utc_tz:
+                            started_at = started_at.astimezone(utc_tz)
+                        
+                        if datetime.now(utc_tz) - started_at > timedelta(hours=2):
+                            safe_log("warn", f"[LOCK] Found stale run (started {started_str}). Taking over.")
+                            # Update to current time and take over
+                            # Note: We return existing ID
+                            supabase.table("runs").update({
+                                "started_at": datetime.now(utc_tz).isoformat(),
+                                "status": "started"
+                            }).eq("id", existing['id']).execute()
+                            return existing['id']
+                        else:
+                            safe_log("info", f"[LOCK] Run in progress (started {started_str}). Skipping.")
+                            return None
+                    except ValueError as ve:
+                        safe_log("error", f"Invalid date format in started_at: {started_str} - {ve}")
+                        # If we can't parse the date, assume it's stale and take over
+                        safe_log("warn", f"[LOCK] Taking over run due to unparseable date.")
                         supabase.table("runs").update({
                             "started_at": datetime.now(utc_tz).isoformat(),
                             "status": "started"
                         }).eq("id", existing['id']).execute()
                         return existing['id']
-                    else:
-                        safe_log("info", f"[LOCK] Run in progress (started {started_str}). Skipping.")
-                        return None
         except Exception as ex:
              logging.error(f"Lock check failed: {ex}")
              
