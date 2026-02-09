@@ -305,15 +305,29 @@ def start_run_lock(date_obj, slot):
                 # If running, check timeout
                 if status == 'started' and started_str:
                     try:
-                        # Handle different ISO format variations
-                        if started_str.endswith('Z'):
-                            started_at = datetime.fromisoformat(started_str.replace('Z', '+00:00'))
-                        elif '+' in started_str or '-' in started_str:
-                            # Already has timezone info
-                            started_at = datetime.fromisoformat(started_str)
-                        else:
-                            # No timezone info, assume UTC
-                            started_at = datetime.fromisoformat(started_str + '+00:00')
+                        # Use a more robust parsing approach for various ISO formats
+                        import re
+                        from dateutil import parser as date_parser
+                        
+                        try:
+                            # Try dateutil parser first (most robust)
+                            started_at = date_parser.parse(started_str)
+                        except (ValueError, ImportError):
+                            # Fallback to manual parsing with regex
+                            # Handle format: 2026-02-09T13:09:28.68841+00:00
+                            if re.match(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+[\+\-]\d{2}:\d{2}', started_str):
+                                # Extract datetime part and timezone part
+                                datetime_part = started_str[:26]  # Up to microseconds
+                                timezone_part = started_str[26:]   # Timezone offset
+                                started_at = datetime.fromisoformat(datetime_part + timezone_part)
+                            elif started_str.endswith('Z'):
+                                started_at = datetime.fromisoformat(started_str.replace('Z', '+00:00'))
+                            elif '+' in started_str or '-' in started_str:
+                                # Already has timezone info
+                                started_at = datetime.fromisoformat(started_str)
+                            else:
+                                # No timezone info, assume UTC
+                                started_at = datetime.fromisoformat(started_str + '+00:00')
                         
                         # Ensure timezone awareness for comparison
                         if started_at.tzinfo is None:

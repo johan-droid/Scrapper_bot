@@ -30,6 +30,7 @@ demo_failure_report.py
 test_anime_only_bot.py
 test_new_format.py
 test_date_fix.py
+test_date_parsing_fix.py
 quick_test.py
 integration_example.py
 setup_telegram_bot.py
