@@ -22,7 +22,7 @@ class TelegraphClient:
                 f"{self.base_url}/createAccount",
                 data={
                     "short_name": "News Bot",
-                    "author_name": "Anime & World News Bot",
+                    "author_name": "Anime News Bot",
                     "author_url": "https://t.me/Detective_Conan_News"
                 },
                 timeout=10

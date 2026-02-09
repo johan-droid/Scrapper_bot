@@ -531,7 +531,6 @@ def send_admin_report(status, posts_sent, source_counts, error=None):
     
     # Calculate category breakdowns (anime only)
     anime_posts = sum(count for source, count in source_counts.items() if source in ANIME_NEWS_SOURCES)
-    world_posts = 0  # No longer tracking world news
     
     # Get daily and all-time totals from database
     daily_total = 0
@@ -576,8 +575,7 @@ def send_admin_report(status, posts_sent, source_counts, error=None):
         
         f"📊 <b>This Cycle</b>\n"
         f"• Posts Sent: <b>{posts_sent}</b>\n"
-        f"• Anime News: {anime_posts}\n"
-        f"• World News: Disabled\n\n"
+        f"• Anime News: {anime_posts}\n\n"
         
         f"📈 <b>Cumulative Stats</b>\n"
         f"• Today's Total: <b>{daily_total}</b>\n"

@@ -74,16 +74,15 @@ TELEGRAPH_TOKEN=your_telegraph_token
 python -m src.main
 ```
 
-### 5. Deploy to Heroku
+### 5. Deploy to GitHub Actions
 
 ```bash
-heroku create your-app-name
-heroku config:set BOT_TOKEN="..." ADMIN_ID="..." ...
-git push heroku main
-heroku ps:scale worker=1
+git add .
+git commit -m "Deploy anime news bot"
+git push origin main
 ```
 
-See [HEROKU_DEPLOY.md](HEROKU_DEPLOY.md) for detailed deployment guide.
+The bot will automatically run every 2 hours via GitHub Actions.
 
 ## 📂 Project Structure
 
@@ -91,18 +90,19 @@ See [HEROKU_DEPLOY.md](HEROKU_DEPLOY.md) for detailed deployment guide.
 Scrapper_bot/
 ├── src/
 │   ├── main.py              # Entry point with scheduler and admin commands
-│   ├── bot.py               # Core bot logic with fault detection
-│   ├── scrapers.py          # RSS parsing and content extraction
-│   ├── database.py          # Supabase integration
+│   ├── bot.py               # Core bot logic with anime news formatting
+│   ├── scrapers.py          # Anime RSS parsing and content extraction
+│   ├── database.py          # Supabase integration with date parsing fix
 │   ├── telegraph_client.py  # Telegraph API client
 │   ├── config.py            # Configuration and constants
 │   ├── models.py            # Data structures
 │   └── utils.py             # Utilities and helpers
 ├── sql/
-│   └── database_setup.sql   # Complete database schema
-├── docs/                    # Documentation
+│   └── update_schema_final_complete.sql   # Complete database schema
+├── .github/
+│   └── workflows/
+│       └── bot_schedule.yml # GitHub Actions workflow
 ├── requirements.txt         # Python dependencies
-├── Procfile                 # Heroku worker configuration
 ├── .env.example             # Environment template
 └── README.md               # This file
 ```
@@ -112,7 +112,7 @@ Scrapper_bot/
 ### Scraping Cycle (Every 2 Hours)
 
 ```
-1. Fetch RSS feeds from all configured sources
+1. Fetch anime RSS feeds from all configured sources
    ↓
 2. Parse entries with flexible handling
    ↓
@@ -120,7 +120,7 @@ Scrapper_bot/
    ↓
 4. Create Telegraph pages (ad-free)
    ↓
-5. Post to appropriate Telegram channels
+5. Post to anime Telegram channel with professional formatting
    ↓
 6. Record in database (deduplication)
    ↓
@@ -151,7 +151,7 @@ Scrapper_bot/
 
 #### `/start` - Bot Information
 ```
-🤖 Scrapper Bot - Admin Panel
+🌸 Anime News Bot - Admin Panel
 
 📊 Bot Status
 • Status: 🟢 Running
@@ -171,12 +171,11 @@ Scrapper_bot/
 📊 Bot Statistics
 
 📅 Today's Performance
-• Total Posts: 85
+• Total Posts: 52
 • Anime News: 52
-• World News: 33
 
 🏆 All-Time Stats
-• Total Posts: 12,458
+• Total Posts: 8,245
 • Success Rate: 95.2%
 ```
 
@@ -216,22 +215,15 @@ All times in UTC (converted from your local timezone).
 
 ## 🔧 Configuration
 
-### News Sources
+### Anime News Sources
 
 #### Anime News (20+ sources)
 - Crunchyroll News
 - Anime Corner
 - Honey's Anime
 - Anime News India
-- And more...
-
-#### World News (15+ sources)
-- BBC World News
-- CNN World
-- The Guardian
-- Al Jazeera
-- Reuters
-- Bloomberg
+- MyAnimeList News
+- Anime UK News
 - And more...
 
 ### Adding New Sources
@@ -252,14 +244,14 @@ SOURCE_LABEL = {
 
 ## 📈 Performance
 
-### Resource Usage (Heroku 1x Dyno)
-- **Memory**: 150-250 MB (out of 512 MB)
+### Resource Usage (GitHub Actions)
+- **Memory**: 150-250 MB
 - **CPU**: 5-15% (shared)
 - **Runtime**: ~30-60s per cycle
 - **Network**: Efficient with retries
 
 ### Scraping Efficiency
-- **Average**: 50-100 items per cycle
+- **Average**: 30-60 anime items per cycle
 - **Deduplication**: 99%+ accuracy
 - **Telegraph Success**: 80%+ of articles
 - **Error Rate**: <5% typical
