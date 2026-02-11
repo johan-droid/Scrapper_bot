@@ -31,6 +31,9 @@ test_anime_only_bot.py
 test_new_format.py
 test_date_fix.py
 test_date_parsing_fix.py
+test_database_optimization.py
+test_db_sync.py
+verify_code_sync.py
 quick_test.py
 integration_example.py
 setup_telegram_bot.py
@@ -55,14 +58,18 @@ htmlcov/
 
 # OS Specific
 .DS_Store
-Thumbs.db
 
 # Tools
 .mypy_cache/
 
-# SQL migration files (keep only final version)
-sql/update_schema_anime_only.sql
-sql/update_schema_anime_only_fixed.sql
+# SQL files (keep only final anime-only script)
+!sql/SUPABASE_FINAL_ANIME_ONLY.sql
+sql/*.sql
 
-# Keep only the final SQL schema
-!sql/update_schema_final_complete.sql
+# Documentation files (keep README, ignore others)
+*.md
+!README.md
+
+# Python files (keep only final anime-only scraper)
+!src/SCRAPER_FINAL_ANIME_ONLY.py
+src/scrapers.py

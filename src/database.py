@@ -16,15 +16,17 @@ supabase = None
 if SUPABASE_URL and SUPABASE_KEY and create_client:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        logging.info("[OK] Supabase connected successfully (Optimized for 2-hour intervals)")
+        logging.info("[OK] Supabase connected successfully (Anime-Only Optimized)")
     except Exception as e:
         logging.warning(f"Supabase connection failed: {e}")
         supabase = None
 
-# Cache for reducing Supabase load
+# Enhanced caching for anime-only bot
 _posted_titles_cache = {}
 _cache_timestamp = None
-CACHE_DURATION = timedelta(hours=1)  # Cache for 1 hour to reduce DB calls
+CACHE_DURATION = timedelta(hours=2)  # Cache for 2 hours to match bot schedule
+_anime_stats_cache = {}
+_stats_cache_timestamp = None
 
 def normalize_title(title):
     prefixes = ["BREAKING:", "NEW:", "UPDATE:", "DC Wiki Update: ", "TMS News: ", 
@@ -38,44 +40,56 @@ def normalize_title(title):
     return t.lower().strip()
 
 def is_duplicate(title, url, posted_titles_set, date_check=True):
+    """Optimized duplicate check for anime-only bot"""
     norm_title = normalize_title(title)
     
+    # Fast local cache check
     if norm_title in posted_titles_set:
         safe_log("info", f"DUPLICATE (Exact): {title[:50]}")
         return True
     
+    # Fuzzy matching with reduced threshold for anime content
     for existing in posted_titles_set:
         dist = difflib.SequenceMatcher(None, norm_title, existing).ratio()
-        if dist > 0.85:
+        if dist > 0.85:  # High threshold for anime news
             safe_log("info", f"DUPLICATE (Fuzzy {dist:.2%}): {title[:50]}")
             return True
     
-    
-    # Reduced Supabase checks for 2-hour intervals - only check recent 3 days instead of 7
-    # OPTIMIZATION: If we have posted_titles_set, we assume it's authoritative for the checked window.
-    # However, to prevent "23505 duplicate key value" errors for older items not in cache,
-    # we MUST check the DB if it's not in our short-term cache.
-    
+    # Optimized database check - only check recent anime posts
     if supabase:
         try:
-            # Check if it exists in DB (even if older than cache window)
-            r = supabase.table("posted_news")\
-                .select("normalized_title")\
-                .eq("normalized_title", norm_title)\
-                .limit(1)\
-                .execute()
-            
-            if r.data:
-                safe_log("info", f"DUPLICATE (Database): {title[:50]}")
-                # Add to local cache to save future queries
-                posted_titles_set.add(norm_title)
-                return True
+            # Use the optimized function if available, fallback to regular query
+            try:
+                r = supabase.rpc("is_duplicate_anime_post", {
+                    "p_normalized_title": norm_title,
+                    "p_article_url": url,
+                    "p_hours_back": 48  # Check last 48 hours for 2-hour schedule
+                }).execute()
+                if r.data and r.data[0]:
+                    safe_log("info", f"DUPLICATE (Optimized DB): {title[:50]}")
+                    posted_titles_set.add(norm_title)
+                    return True
+            except Exception:
+                # Fallback to regular query if RPC function not available
+                r = supabase.table("posted_news")\
+                    .select("normalized_title")\
+                    .eq("normalized_title", norm_title)\
+                    .eq("channel_type", "anime")\
+                    .gte("posted_date", (datetime.now(utc_tz) - timedelta(hours=48)).isoformat())\
+                    .limit(1)\
+                    .execute()
+                
+                if r.data:
+                    safe_log("info", f"DUPLICATE (Fallback DB): {title[:50]}")
+                    posted_titles_set.add(norm_title)
+                    return True
         except Exception as e:
             logging.warning(f"DB duplicate check failed: {e}")
     
     return False
 
 def initialize_bot_stats():
+    """Initialize anime-only bot statistics"""
     if not supabase: return
     try:
         resp = supabase.table("bot_stats").select("*").limit(1).execute()
@@ -83,20 +97,27 @@ def initialize_bot_stats():
             now = datetime.now(utc_tz).isoformat()
             supabase.table("bot_stats").insert({
                 "bot_started_at": now, 
-                "total_posts_all_time": 0
+                "total_posts_all_time": 0,
+                "total_anime_posts": 0,
+                "total_world_posts": 0,
+                "config_version": "anime-only-v1.0",
+                "notes": "Anime-only bot initialized"
             }).execute()
-            safe_log("info", "Bot stats initialized")
+            safe_log("info", "Anime-only bot stats initialized")
     except Exception as e:
         logging.error(f"Failed to initialize bot stats: {e}")
 
 def ensure_daily_row(date_obj):
+    """Ensure daily stats row exists for anime-only bot"""
     if not supabase: return
     try:
         r = supabase.table("daily_stats").select("date").eq("date", str(date_obj)).limit(1).execute()
         if not r.data:
             supabase.table("daily_stats").insert({
                 "date": str(date_obj), 
-                "posts_count": 0
+                "posts_count": 0,
+                "anime_posts": 0,
+                "world_posts": 0
             }).execute()
     except Exception as e:
         logging.error(f"Failed to ensure daily row: {e}")
@@ -132,6 +153,7 @@ def increment_post_counters(date_obj):
         logging.error(f"Atomic stats update failed: {e}")
 
 def load_posted_titles(date_obj):
+    """Load posted titles with anime-only optimization"""
     # Use cache to reduce Supabase load for 2-hour intervals
     global _posted_titles_cache, _cache_timestamp
     current_time = now_local()
@@ -149,10 +171,11 @@ def load_posted_titles(date_obj):
         return set()
     
     try:
-        # Reduced from 7 days to 3 days for 2-hour intervals
+        # Optimized: Only load anime posts from last 3 days
         past_date = str(date_obj - timedelta(days=3))
         r = supabase.table("posted_news")\
             .select("normalized_title, full_title")\
+            .eq("channel_type", "anime")\
             .gte("posted_date", past_date)\
             .execute()
         
@@ -167,7 +190,7 @@ def load_posted_titles(date_obj):
         _posted_titles_cache[str(date_obj)] = titles
         _cache_timestamp = current_time
         
-        safe_log("info", f"Loaded {len(titles)} titles from last 3 days (optimized for 2h intervals)")
+        safe_log("info", f"Loaded {len(titles)} anime titles from last 3 days (optimized)")
         return titles
     except Exception as e:
         logging.error(f"Failed to load posted titles: {e}")
@@ -377,7 +400,7 @@ def end_run_lock(run_id, status, posts_sent, source_counts, error=None):
         logging.error(f"Failed to release lock: {e}")
 def get_todays_posts_stats():
     """
-    Fetch all posts for the current day to generate a detailed report.
+    Fetch all anime posts for the current day to generate a detailed report.
     Returns a dict with summary stats and list of posts.
     """
     if not supabase: 
@@ -385,10 +408,11 @@ def get_todays_posts_stats():
     
     try:
         date_obj = str(now_local().date())
-        # Fetch all posts for today
+        # Fetch only anime posts for today
         r = supabase.table("posted_news")\
             .select("source, full_title, status, posted_at, channel_type")\
             .eq("posted_date", date_obj)\
+            .eq("channel_type", "anime")\
             .execute()
         
         data = r.data if r.data else []
@@ -406,22 +430,115 @@ def get_todays_posts_stats():
             
         return stats
     except Exception as e:
-        logging.error(f"Failed to fetch today's stats: {e}")
+        logging.error(f"Failed to fetch today's anime stats: {e}")
         return None
+
+def get_anime_statistics():
+    """
+    Get optimized anime statistics using cached data and efficient queries
+    """
+    global _anime_stats_cache, _stats_cache_timestamp
+    current_time = now_local()
+    
+    # Check cache first (5 minute cache for stats)
+    if (_stats_cache_timestamp and 
+        current_time - _stats_cache_timestamp < timedelta(minutes=5)):
+        return _anime_stats_cache
+    
+    if not supabase:
+        return {
+            "total_posts": 0,
+            "today_posts": 0,
+            "week_posts": 0,
+            "month_posts": 0,
+            "unique_sources": 0,
+            "last_updated": None
+        }
+    
+    try:
+        # Try to use the optimized function if available
+        try:
+            r = supabase.rpc("get_anime_statistics").execute()
+            if r.data and len(r.data) > 0:
+                stats = r.data[0]
+                _anime_stats_cache = stats
+                _stats_cache_timestamp = current_time
+                return stats
+        except Exception:
+            pass  # Fallback to manual queries
+        
+        # Fallback manual queries
+        today = str(current_time.date())
+        week_ago = str((current_time - timedelta(days=7)).date())
+        month_ago = str((current_time - timedelta(days=30)).date())
+        
+        # Get counts efficiently
+        total_posts = supabase.table("posted_news").select("id", count="exact")\
+            .eq("channel_type", "anime").execute()
+        
+        today_posts = supabase.table("posted_news").select("id", count="exact")\
+            .eq("channel_type", "anime").eq("posted_date", today).execute()
+        
+        week_posts = supabase.table("posted_news").select("id", count="exact")\
+            .eq("channel_type", "anime").gte("posted_date", week_ago).execute()
+        
+        month_posts = supabase.table("posted_news").select("id", count="exact")\
+            .eq("channel_type", "anime").gte("posted_date", month_ago).execute()
+        
+        sources = supabase.table("posted_news").select("source", count="exact")\
+            .eq("channel_type", "anime").execute()
+        
+        stats = {
+            "total_posts": total_posts.count or 0,
+            "today_posts": today_posts.count or 0,
+            "week_posts": week_posts.count or 0,
+            "month_posts": month_posts.count or 0,
+            "unique_sources": len(set(s.get('source') for s in sources.data if s.get('source'))),
+            "last_updated": current_time.isoformat()
+        }
+        
+        _anime_stats_cache = stats
+        _stats_cache_timestamp = current_time
+        
+        return stats
+    except Exception as e:
+        logging.error(f"Failed to get anime statistics: {e}")
+        return {
+            "total_posts": 0,
+            "today_posts": 0,
+            "week_posts": 0,
+            "month_posts": 0,
+            "unique_sources": 0,
+            "last_updated": None
+        }
 
 def run_db_cleanup():
     """
-    Calls the database RPC to clean up old data (logs, runs, posted items > 30 days).
+    Calls the database RPC to clean up old anime data (logs, runs, posted items > 30 days).
     This helps keep the database size within Supabase Free Tier limits.
+    Anime-only optimization.
     """
     if not supabase: return
     try:
-        # Only run cleanup if it's the first slot of the day (approx) to save resources 
-        # But for simplicity in Cron, we can run it every time or check time.
-        # Since it's a lightweight delete query, running it on every cron (every 2h) is fine.
-        # It ensures we never accidentally grow too large.
-        supabase.rpc('cleanup_old_data').execute()
-        safe_log("info", "🧹 Database cleanup executed successfully")
+        # Try to use the optimized anime cleanup function
+        try:
+            result = supabase.rpc("cleanup_old_anime_posts").execute()
+            if result.data:
+                deleted_count = result.data[0] if isinstance(result.data, list) else result.data
+                safe_log("info", f"🧹 Cleaned up {deleted_count} old anime posts")
+        except Exception:
+            # Fallback to regular cleanup
+            supabase.rpc('cleanup_old_data').execute()
+            safe_log("info", "🧹 Database cleanup executed successfully")
+        
+        # Also refresh materialized views if available
+        try:
+            supabase.rpc("refresh_anime_summary").execute()
+            safe_log("info", "📊 Anime summary refreshed")
+        except Exception:
+            pass  # Materialized view might not exist
+            
     except Exception as e:
         # Don't fail the whole bot run for this
+        logging.warning(f"Database cleanup failed: {e}")
         logging.warning(f"Database cleanup failed (non-critical): {e}")

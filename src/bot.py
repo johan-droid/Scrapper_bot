@@ -17,7 +17,7 @@ from src.database import (
     record_post, increment_post_counters, is_duplicate, start_run_lock, end_run_lock
 )
 from src.telegraph_client import TelegraphClient
-from src.scrapers import fetch_rss, parse_rss_robust, extract_full_article_content
+from src.SCRAPER_FINAL_ANIME_ONLY import fetch_rss, parse_rss_robust, extract_full_article_content
 from src.models import NewsItem
 
 # Initialize Telegraph Client with Persistence
